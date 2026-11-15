@@ -732,7 +732,7 @@ function updateChat(forceScroll = false) {
     ${chat.crew ? `<span class="badge">Crew ${chat.crew}</span>` : ''}
     <span class="badge"><span class="dot ${dotClass(chat)}"></span>${esc(statusText)}</span>
     ${chat.status === 'running' && project?.browser && !chat.assist ? `<button data-a="live" title="Den Browser des Agenten live ansehen">${S.liveOpen === chat.id ? 'Browser schließen' : 'Browser'}</button>` : ''}
-    ${chat.status === 'running' || chat.status === 'queued' ? '<button data-a="stop">Stoppen</button>' : ''}
+    ${['running', 'queued', 'waiting'].includes(chat.status) ? '<button data-a="stop">Stoppen</button>' : ''}
     <button class="ghost" data-a="archive" title="Aus der Liste entfernen">Archivieren</button>`;
   $('#chat-head').onclick = (event) => {
     const a = event.target.closest('button')?.dataset.a;
