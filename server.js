@@ -286,11 +286,34 @@ async function api(req, url) {
     }
   }
 
+  // Die Zentrale ist kein Projekt für den Menschen, sondern ein einzelner Chat ganz oben. Intern
+  // läuft sie über einen versteckten Eintrag; den und ihren Chat legt der Leitstand bei Bedarf an.
+  if (area === 'zentrale' && method === 'POST') {
+    let project = state.projects.find((p) => p.zentrale);
+    if (!project) {
+      const machine = state.machines.find((m) => m.kind === 'local');
+      project = {
+        id: id(), name: 'Zentrale', dir: path.join(process.env.HOME || os.homedir(), 'projekte', 'zentrale'), machineId: machine.id,
+        mode: 'selbststaendig', model: '', effort: '', allow: [], identity: { mail: false, sms: false, wallet: false }, zentrale: true,
+      };
+      fs.mkdirSync(project.dir, { recursive: true });
+      state.projects.push(project);
+      changed('projects');
+    }
+    let chat = state.chats.filter((c) => c.projectId === project.id && c.status !== 'archived').sort((a, b) => b.createdAt - a.createdAt)[0];
+    if (!chat) chat = newChat(project, 'Zentrale');
+    const text = String(body.text || '').trim();
+    if (text) sendMessage(chat, text);
+    else chatChanged(chat);
+    return chat;
+  }
+
   if (area === 'chats') {
     if (method === 'POST' && !key) {
       const project = findProject(body.projectId);
       const text = String(body.text || '').trim();
       if (!project) throw httpError(400, 'Projekt fehlt');
+      if (project.zentrale) throw httpError(400, 'Die Zentrale hat genau einen Chat. Schreib ihr dort.');
       if (!text) throw httpError(400, 'Auftrag fehlt');
       // Modell und Aufwand für diesen Chat; leer heißt Vorgabe des Projekts (sonst Opus, medium).
       const choice = {};

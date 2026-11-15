@@ -413,7 +413,6 @@ a.list-row:hover { background: var(--panel-2); }
 .sub.ended { opacity: 0.6; }
 .sub .path b { color: var(--text); }
 
-.group-title.zentrale span:first-child { color: var(--accent); }
 /* Plus je Projekt in der Liste, Modellwahl im Chat-Kopf */
 .group-title { align-items: center; }
 .group-side { display: inline-flex; align-items: center; gap: 6px; }
@@ -442,3 +441,22 @@ a.list-row:hover { background: var(--panel-2); }
 .item:hover .item-x, .item.active .item-x { display: inline-flex; }
 .item .item-x:hover { background: var(--line); color: var(--text); }
 @media (hover: none) { .item .item-x { display: inline-flex; } }
+
+/* Zentrale: ein eigener Chat ganz oben, abgesetzt von den Projekten */
+.zentrale-entry {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 12px 12px; margin: 0 0 14px; border-radius: 12px; cursor: pointer;
+  background: linear-gradient(135deg, rgba(62, 207, 142, 0.16), rgba(62, 207, 142, 0.04));
+  border: 1px solid rgba(62, 207, 142, 0.45); color: inherit; font: inherit;
+  position: relative;
+}
+.zentrale-entry::after {
+  content: ''; position: absolute; left: 4px; right: 4px; bottom: -8px; height: 1px; background: var(--line);
+}
+.zentrale-entry:hover { border-color: var(--accent); }
+.zentrale-entry.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.zentrale-entry .z-icon { font-size: 20px; color: var(--accent); line-height: 1; }
+.zentrale-entry .z-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.zentrale-entry .z-text b { font-size: 14px; letter-spacing: 0.01em; }
+.zentrale-entry .z-text span { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.zentrale-entry .z-state { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }

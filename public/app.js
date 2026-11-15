@@ -144,7 +144,14 @@ function ago(ts) {
 const when = (ts) => (ts ? new Date(ts).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }) : '');
 const money = (amount, currency) => `${Number(amount).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
 
-const projectOf = (chat) => S.projects.find((p) => p.id === chat.projectId);
+const projectOf = (chat) => (S.allProjects || S.projects).find((p) => p.id === chat.projectId);
+// Die Zentrale ist kein Projekt für dich: ein einzelner Chat ganz oben, intern über einen versteckten Eintrag.
+const isZentrale = (chat) => Boolean(chat && projectOf(chat)?.zentrale);
+const zentraleChat = () => [...S.chats.values()].filter((c) => isZentrale(c) && c.status !== 'archived').sort((a, b) => b.createdAt - a.createdAt)[0];
+function setProjects(list) {
+  S.allProjects = list;
+  S.projects = list.filter((p) => !p.zentrale);
+}
 const machineOf = (project) => S.machines.find((m) => m.id === project?.machineId);
 const isSnoozed = (chat) => chat.snoozeUntil && chat.snoozeUntil > Date.now();
 const chatList = () => [...S.chats.values()];
@@ -620,8 +627,29 @@ document.addEventListener('click', (event) => {
 
 // ---------- Chat-Liste ----------
 
+function renderZentraleEntry() {
+  const el = $('#zentrale-entry');
+  if (!el) return;
+  const chat = zentraleChat();
+  const state = !chat ? '' : chat.status === 'running' || chat.status === 'queued' ? 'verteilt gerade …' : chat.status === 'attention' ? 'fragt dich etwas' : 'bereit';
+  el.className = `zentrale-entry ${chat && chat.id === S.chatId ? 'active' : ''}`;
+  el.innerHTML = `<span class="z-icon" aria-hidden="true">◎</span>
+    <span class="z-text"><b>Zentrale</b><span>Schreib hier alles, sie verteilt es an deine Projekte</span></span>
+    ${chat ? `<span class="z-state"><span class="dot ${dotClass(chat)}"></span>${esc(state)}</span>` : ''}`;
+}
+
+async function openZentrale() {
+  let chat = zentraleChat();
+  if (!chat) {
+    chat = await api('POST', '/api/zentrale', {});
+    S.chats.set(chat.id, chat);
+  }
+  selectChat(chat.id);
+}
+
 function renderChatList() {
-  const all = chatList().filter((c) => c.status !== 'archived');
+  renderZentraleEntry();
+  const all = chatList().filter((c) => c.status !== 'archived' && !isZentrale(c));
   const counts = {
     alle: all.length,
     warten: all.filter((c) => c.status === 'attention' && !isSnoozed(c)).length,
@@ -641,8 +669,7 @@ function renderChatList() {
     (S.chatFilter === 'warten' && c.status === 'attention' && !isSnoozed(c)) ||
     (S.chatFilter === 'laufen' && ['running', 'queued', 'waiting'].includes(c.status));
   const html = [];
-  const ordered = [...S.projects.filter((p) => p.zentrale), ...S.projects.filter((p) => !p.zentrale)];
-  for (const project of ordered) {
+  for (const project of S.projects) {
     const mine = all.filter((c) => c.projectId === project.id && visible(c));
     const isChild = (c) => c.parentId && mine.some((p) => p.id === c.parentId);
     // Neueste Aufträge oben, darunter jeweils ihre Teilaufträge (auch verschachtelte) in der Reihenfolge der Vergabe.
@@ -656,7 +683,7 @@ function renderChatList() {
       .sort((a, b) => b.createdAt - a.createdAt)
       .flatMap((c) => withKids(c, 0));
     if (!chats.length && S.chatFilter !== 'alle') continue;
-    html.push(`<div class="group-title ${project.zentrale ? 'zentrale' : ''}"><span>${esc(project.name)}</span><span class="group-side">${project.zentrale ? 'verteilt an die Projekte' : esc(machineOf(project)?.kind === 'ssh' ? machineOf(project).name : '')}<button class="group-add" data-new="${project.id}" title="Neuer Chat in „${esc(project.name)}“" aria-label="Neuer Chat in ${esc(project.name)}">+</button></span></div>`);
+    html.push(`<div class="group-title"><span>${esc(project.name)}</span><span class="group-side">${esc(machineOf(project)?.kind === 'ssh' ? machineOf(project).name : '')}<button class="group-add" data-new="${project.id}" title="Neuer Chat in „${esc(project.name)}“" aria-label="Neuer Chat in ${esc(project.name)}">+</button></span></div>`);
     if (!chats.length) html.push('<p class="hint">Noch kein Auftrag.</p>');
     for (const chat of chats) {
       const meta =
@@ -760,26 +787,26 @@ function updateChat(forceScroll = false) {
   const kidsOpen = kids.filter((c) => ['running', 'queued'].includes(c.status)).length;
   const kidsDone = kids.filter(canRemoveChat).length;
   const parent = chat.parentId && S.chats.get(chat.parentId);
-  const sub = [project?.name, machine?.kind === 'ssh' ? machine.name : '', chat.viaZentrale ? 'über die Zentrale' : '', project?.zentrale ? 'verteilt nur, ohne Vorgeschichte' : '', parent ? `Teilauftrag von „${parent.title}“` : 'Lead-Agent', kids.length ? `${kids.length} Teilaufträge, ${kidsOpen} laufen` : '', chat.attention?.naechster_schritt ? `Nächster Schritt: ${chat.attention.naechster_schritt}` : '']
+  const sub = [project?.name, machine?.kind === 'ssh' ? machine.name : '', chat.viaZentrale ? 'über die Zentrale' : '', project?.zentrale ? 'verteilt an deine Projekte, ohne Vorgeschichte' : '', parent ? `Teilauftrag von „${parent.title}“` : 'Lead-Agent', kids.length ? `${kids.length} Teilaufträge, ${kidsOpen} laufen` : '', chat.attention?.naechster_schritt ? `Nächster Schritt: ${chat.attention.naechster_schritt}` : '']
     .filter(Boolean).map(esc).join(' · ');
   // Während eine Modellauswahl offen ist, nicht neu zeichnen, sonst klappt sie zu.
   if (!document.activeElement?.closest?.('#chat-head select')) $('#chat-head').innerHTML = `
     <button class="ghost back" data-a="back" aria-label="Zurück zur Liste">←</button>
     <div class="grow">
       <h1>${esc(chat.title)}</h1>
-      <div class="sub">${sub}</div>
+      <div class="sub">${isZentrale(chat) ? 'Verteilt deine Nachrichten an die Projekte · arbeitet selbst nichts aus · ohne Vorgeschichte' : sub}</div>
     </div>
     ${chat.crew ? `<span class="badge">Crew ${chat.crew}</span>` : ''}
-    <span class="model-pick" title="Modell und Aufwand dieses Chats, gilt ab dem nächsten Zug">
+    ${isZentrale(chat) ? '<span class="badge">Fable 5.2</span>' : `<span class="model-pick" title="Modell und Aufwand dieses Chats, gilt ab dem nächsten Zug">
       <select data-pick="model" aria-label="Modell">${modelOptions(chat.model || '', projectOf(chat)?.model || 'opus')}</select>
       <select data-pick="effort" aria-label="Aufwand">${effortOptions(chat.effort || '', projectOf(chat)?.effort || 'medium')}</select>
     </span>
-    <button data-a="new" title="Neuen Chat in „${esc(project?.name || '')}“ starten">+ Chat</button>
+    <button data-a="new" title="Neuen Chat in „${esc(project?.name || '')}“ starten">+ Chat</button>`}
     <span class="badge"><span class="dot ${dotClass(chat)}"></span>${esc(statusText)}</span>
     ${chat.status === 'running' && project?.browser && !chat.assist ? `<button data-a="live" title="Den Browser des Agenten live ansehen">${S.liveOpen === chat.id ? 'Browser schließen' : 'Browser'}</button>` : ''}
     ${['running', 'queued', 'waiting'].includes(chat.status) ? '<button data-a="stop">Stoppen</button>' : ''}
     ${kidsDone ? `<button data-a="remove-children" title="Beendete Teilaufträge aus der Liste entfernen; laufende bleiben stehen">Beendete entfernen (${kidsDone})</button>` : ''}
-    ${chat.parentId && canRemoveChat(chat) ? '<button class="ghost" data-a="remove" title="Diesen beendeten Teilauftrag aus der Liste entfernen">Entfernen</button>' : '<button class="ghost" data-a="archive" title="Aus der Liste entfernen">Archivieren</button>'}`;
+    ${isZentrale(chat) ? '' : chat.parentId && canRemoveChat(chat) ? '<button class="ghost" data-a="remove" title="Diesen beendeten Teilauftrag aus der Liste entfernen">Entfernen</button>' : '<button class="ghost" data-a="archive" title="Aus der Liste entfernen">Archivieren</button>'}`;
   $('#chat-head').onchange = (event) => {
     const pick = event.target.closest('select[data-pick]')?.dataset.pick;
     if (pick) run(api('PATCH', `/api/chats/${chat.id}`, { [pick]: event.target.value }).then((c) => { S.chats.set(c.id, c); updateChat(); }));
@@ -822,7 +849,9 @@ function updateChat(forceScroll = false) {
 
   const running = chat.status === 'running';
   $('#composer-interrupt').hidden = !running;
-  $('#composer-input').placeholder = running
+  $('#composer-input').placeholder = isZentrale(chat)
+    ? 'Schreib einfach, was zu tun ist. Die Zentrale gibt es an das passende Projekt weiter (Enter).'
+    : running
     ? 'Kommt sofort beim Agenten an (Enter) · Esc unterbricht'
     : 'Nachricht an deinen Lead-Agenten (Enter sendet, Umschalt+Enter für neue Zeile)';
 
@@ -1367,7 +1396,6 @@ function renderProjects() {
       <div class="checks">
         <span class="note" style="margin:0">Der Agent darf nutzen:</span>
         <label><input type="checkbox" data-browser ${p.browser ? 'checked' : ''}>Browser</label>
-        <label title="Ein Chat für alles: verteilt deine Nachrichten an die passenden Projekte, arbeitet selbst nichts aus und hat kaum Kontext."><input type="checkbox" data-zentrale ${p.zentrale ? 'checked' : ''}>Zentrale</label>
         ${machine?.info?.os === 'darwin' ? `<label title="Der Agent bedient den Mac: Bildschirm sehen, klicken, tippen, Programme (Peekaboo). Braucht die Peekaboo-App mit Bildschirmaufnahme und Bedienungshilfen."><input type="checkbox" data-computer ${p.computerUse ? 'checked' : ''}>Computer Use</label>
         <label title="Agenten anderer Projekte schicken diesem Projekt Aufträge, die nur auf deinem Mac gehen (leitstand laptop)."><input type="checkbox" data-laptop ${p.laptop ? 'checked' : ''}>Nimmt Laptop-Aufträge an</label>` : ''}
         ${machine?.kind === 'local' ? `<label title="Deine persönliche ~/.claude/CLAUDE.md, etwa die Regeln zu deinem Second Brain"><input type="checkbox" data-personal ${p.personal ? 'checked' : ''}>Meine CLAUDE.md</label>` : ''}
@@ -1399,8 +1427,6 @@ $('#projects').addEventListener('change', (event) => {
     run(api('PATCH', `/api/projects/${project.id}`, { [field]: event.target.value }));
   } else if ('personal' in event.target.dataset) {
     run(api('PATCH', `/api/projects/${project.id}`, { personal: event.target.checked }));
-  } else if ('zentrale' in event.target.dataset) {
-    run(api('PATCH', `/api/projects/${project.id}`, { zentrale: event.target.checked }));
   } else if ('computer' in event.target.dataset) {
     run(api('PATCH', `/api/projects/${project.id}`, { computerUse: event.target.checked }));
   } else if ('laptop' in event.target.dataset) {
@@ -2063,6 +2089,7 @@ $('#tabs').onclick = (event) => {
   if (view) setView(view);
 };
 $('#new-chat').onclick = newChatDialog;
+$('#zentrale-entry').onclick = () => openZentrale().catch((err) => alert(err.message));
 $('#new-page').onclick = newPageDialog;
 $('#chat-filter').onclick = (event) => {
   const filter = event.target.dataset.filter;
@@ -2095,7 +2122,7 @@ document.addEventListener('keydown', (event) => {
 });
 
 function applyState(data) {
-  S.projects = data.projects;
+  setProjects(data.projects);
   S.chats = new Map(data.chats.map((c) => [c.id, c]));
   S.pages = data.pages;
   S.machines = data.machines;
@@ -2123,7 +2150,7 @@ function connect() {
     refreshOverviewLive();
   });
   source.addEventListener('projects', (event) => {
-    S.projects = JSON.parse(event.data);
+    setProjects(JSON.parse(event.data));
     renderAll();
     renderProjects();
     if (!S.chats.get(S.chatId)) buildChat();
