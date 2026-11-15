@@ -460,3 +460,17 @@ a.list-row:hover { background: var(--panel-2); }
 .zentrale-entry .z-text b { font-size: 14px; letter-spacing: 0.01em; }
 .zentrale-entry .z-text span { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .zentrale-entry .z-state { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+/* Medien im Chat: Video, Audio, Bild, PDF und Seiten als Vorschau */
+.msg.result { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent, #4a7); border-radius: var(--radius); padding: 10px 14px; }
+.msg.result > :first-child { margin-top: 0; }
+.msg.result > :last-child { margin-bottom: 0; }
+.msg.result p { margin: 6px 0; }
+.embed { display: block; margin: 8px 0; max-width: 100%; }
+.embed video, .embed img { display: block; max-width: 100%; max-height: 60vh; border-radius: 8px; border: 1px solid var(--line); }
+.embed video { background: #000; }
+.embed audio { display: block; width: 100%; max-width: 480px; }
+.embed iframe { display: block; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.embed-doc { height: 70vh; }
+.embed-page { height: 60vh; }
+.embed-cap { display: block; margin-top: 4px; font-size: 12.5px; opacity: .8; }

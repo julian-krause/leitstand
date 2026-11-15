@@ -51,17 +51,78 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
+// ---------- Medien im Chat ----------
+// Links auf Dateien (über /files/ ausgeliefert) und Pfade in den Projektordnern erscheinen als
+// Vorschau: Video und Audio mit Player, Bilder, PDFs und HTML-Seiten im Rahmen.
+const MEDIA = {
+  video: /\.(mp4|webm|mov|m4v)$/i,
+  audio: /\.(mp3|m4a|wav|ogg|oga)$/i,
+  image: /\.(png|jpe?g|gif|webp|svg|avif)$/i,
+  pdf: /\.pdf$/i,
+  page: /\.html?$/i,
+};
+const MEDIA_EXT = 'mp4|webm|mov|m4v|mp3|m4a|wav|ogg|oga|png|jpe?g|gif|webp|svg|avif|pdf|html?';
+const MAX_EMBEDS = 8;
+let EMBED = { count: 0, seen: new Set() };
+
+function mediaKind(url) {
+  const bare = url.replace(/&amp;/g, '&').split(/[?#]/)[0];
+  const local = bare.startsWith('/files/');
+  for (const [kind, re] of Object.entries(MEDIA)) if (re.test(bare)) return local || ['video', 'audio', 'image'].includes(kind) ? kind : null;
+  return local && bare.endsWith('/') ? 'page' : null;
+}
+
+function embed(title, url) {
+  const link = `<a href="${url}" target="_blank" rel="noopener">${title}</a>`;
+  const kind = mediaKind(url);
+  if (!kind || EMBED.count >= MAX_EMBEDS || EMBED.seen.has(url)) return link;
+  EMBED.count += 1;
+  EMBED.seen.add(url);
+  const open = `<span class="embed-cap">${link} · <a href="${url}" target="_blank" rel="noopener">In neuem Tab öffnen</a></span>`;
+  if (kind === 'video') return `<span class="embed"><video src="${url}" controls preload="metadata" playsinline></video>${open}</span>`;
+  if (kind === 'audio') return `<span class="embed"><audio src="${url}" controls preload="metadata"></audio>${open}</span>`;
+  if (kind === 'image') return `<span class="embed"><a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${title}" loading="lazy"></a>${open}</span>`;
+  if (kind === 'pdf') return `<span class="embed"><iframe class="embed-doc" src="${url}" loading="lazy" title="${title}"></iframe>${open}</span>`;
+  return `<span class="embed"><iframe class="embed-page" src="${url}" loading="lazy" sandbox="allow-scripts allow-forms allow-popups" title="${title}"></iframe>${open}</span>`;
+}
+
+// Pfade in den Projektordnern dieses Rechners zu /files/-Links machen (nur Medien, nicht in Codeblöcken).
+function mediaLinks(line, project) {
+  const local = (S.allProjects || S.projects || []).filter((p) => p.dir && machineOf(p)?.kind === 'local');
+  const toUrl = (abs) => {
+    const p = local.filter((x) => abs.startsWith(x.dir.replace(/\/+$/, '') + '/')).sort((a, b) => b.dir.length - a.dir.length)[0];
+    if (!p) return null;
+    return fileUrl(p.id, abs.slice(p.dir.replace(/\/+$/, '').length + 1)) + (abs.endsWith('/') ? '/' : '');
+  };
+  const name = (abs) => abs.replace(/\/+$/, '').split('/').pop();
+  const ext = new RegExp(`\\.(?:${MEDIA_EXT})$`, 'i');
+  // [Titel](/home/…) -> [Titel](/files/…)
+  line = line.replace(/\]\((\/[^\s)]+)\)/g, (m, abs) => (toUrl(abs) ? `](${toUrl(abs)})` : m));
+  // `pfad` oder nackter absoluter Pfad mit Medien-Endung
+  line = line.replace(/(`?)((?:\/|~\/)[^\s`'"()<>\[\]]+)\1/g, (m, tick, raw, offset, all) => {
+    if (all.slice(Math.max(0, offset - 2), offset) === '](') return m;
+    const abs = raw.replace(/[.,;:!?]+$/, '');
+    if (!ext.test(abs)) return m;
+    const url = toUrl(abs);
+    return url ? `[${name(abs)}](${url})${raw.slice(abs.length)}` : m;
+  });
+  // `relativer/pfad.mp4` im eigenen Projektordner
+  if (project?.dir && machineOf(project)?.kind === 'local') {
+    line = line.replace(/`([^`\s/][^`\s]*)`/g, (m, rel) => (ext.test(rel) && !/^[a-z]+:/i.test(rel) && !rel.includes('..') ? `[${name(rel)}](${fileUrl(project.id, rel)})` : m));
+  }
+  return line;
+}
+
 function inline(s) {
   return esc(s)
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\[([^\]]+)\]\((\/files\/[^\s)]+\.(?:mp4|webm|mov))\)/gi, '<video src="$2" style="max-width:100%;max-height:60vh;border-radius:8px;background:#000" controls preload="metadata" playsinline></video><br><a href="$2" target="_blank" rel="noopener">$1</a>')
-    .replace(/\[([^\]]+)\]\((\/files\/[^\s)]+\.(?:mp3|m4a|wav|ogg))\)/gi, '<audio src="$2" controls preload="metadata"></audio><br><a href="$2" target="_blank" rel="noopener">$1</a>')
-    .replace(/\[([^\]]+)\]\(((?:https?:\/\/|\/files\/)[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(/\[([^\]]+)\]\(((?:https?:\/\/|\/files\/)[^\s)]+)\)/g, (m, title, url) => embed(title, url));
 }
 
 // Kleines Markdown: Überschriften, Listen, Code, Absätze. Alles wird vorher maskiert.
-function md(text) {
+function md(text, project = null) {
+  EMBED = { count: 0, seen: new Set() };
   const out = [];
   const lines = String(text ?? '').split('\n');
   let para = [];
@@ -75,7 +136,7 @@ function md(text) {
     list = null;
   };
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    let line = lines[i];
     if (line.trim().startsWith('```')) {
       flushPara();
       flushList();
@@ -85,6 +146,7 @@ function md(text) {
       out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
       continue;
     }
+    line = mediaLinks(line, project);
     const heading = line.match(/^(#{1,4})\s+(.*)$/);
     const bullet = line.match(/^\s*[-*]\s+(.*)$/);
     const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
@@ -834,8 +896,9 @@ function updateChat(forceScroll = false) {
   const box = $('#messages');
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
   const html = chat.messages.map((m) =>
-    m.role === 'agent' ? `<div class="msg agent">${md(m.text)}</div>` : `<div class="msg ${m.role}">${esc(m.text)}</div>`,
+    m.role === 'agent' || m.role === 'result' ? `<div class="msg ${m.role}">${md(m.text, project)}</div>` : `<div class="msg ${m.role}">${esc(m.text)}</div>`,
   );
+  const keys = chat.messages.map((m) => m.id);
   if (chat.status === 'running') {
     const lastMove = chat.messages.length ? chat.messages[chat.messages.length - 1].ts : chat.createdAt;
     html.push(`<div class="working"><span class="dot running"></span>${chat.progress ? `<b>${esc(chat.progress.text)}</b> · ` : ''}${esc(chat.activity || 'Arbeitet …')} · letzte Regung ${esc(ago(lastMove))}${chat.pending?.length ? ` · ${chat.pending.length} Nachricht(en) folgen gleich` : ''}</div>`);
@@ -844,7 +907,8 @@ function updateChat(forceScroll = false) {
   } else if (chat.status === 'waiting') {
     html.push(`<div class="working"><span class="dot queued"></span>${esc(chat.waitingFor || 'Wartet auf die Ergebnisse der Teilaufträge.')}</div>`);
   }
-  $('#messages-inner').innerHTML = html.join('');
+  // Nur geänderte Nachrichten neu zeichnen: Videos spielen weiter, Vorschauen laden nicht neu.
+  patchNodes($('#messages-inner'), html.map((h, i) => ({ key: keys[i] || `extra-${i}`, html: h })));
   if (forceScroll || nearBottom) box.scrollTop = box.scrollHeight;
 
   const running = chat.status === 'running';
@@ -856,6 +920,26 @@ function updateChat(forceScroll = false) {
     : 'Nachricht an deinen Lead-Agenten (Enter sendet, Umschalt+Enter für neue Zeile)';
 
   renderAsk(chat);
+}
+
+function patchNodes(box, items) {
+  const old = new Map([...box.children].filter((n) => n.dataset.k).map((n) => [n.dataset.k, n]));
+  items.forEach((item, i) => {
+    let node = old.get(item.key);
+    if (!node || node._html !== item.html) {
+      const t = document.createElement('template');
+      t.innerHTML = item.html;
+      const fresh = t.content.firstElementChild || document.createElement('div');
+      fresh.dataset.k = item.key;
+      fresh._html = item.html;
+      if (node) node.replaceWith(fresh);
+      node = fresh;
+    }
+    old.delete(item.key);
+    if (box.children[i] !== node) box.insertBefore(node, box.children[i] || null);
+  });
+  for (const n of old.values()) n.remove();
+  while (box.children.length > items.length) box.lastElementChild.remove();
 }
 
 // ---------- Browser live im Chat ----------
