@@ -412,3 +412,27 @@ a.list-row:hover { background: var(--panel-2); }
 .warn-text { color: var(--warn); }
 .sub.ended { opacity: 0.6; }
 .sub .path b { color: var(--text); }
+
+.group-title.zentrale span:first-child { color: var(--accent); }
+/* Plus je Projekt in der Liste, Modellwahl im Chat-Kopf */
+.group-title { align-items: center; }
+.group-side { display: inline-flex; align-items: center; gap: 6px; }
+.group-add {
+  width: 22px; height: 22px; padding: 0; border-radius: 6px; line-height: 1;
+  font-size: 16px; font-weight: 600; text-transform: none; letter-spacing: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.model-pick { display: inline-flex; gap: 4px; }
+.model-pick select { font-size: 12px; padding: 3px 6px; width: auto; }
+.form .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+/* Entscheidungskarte: nie mehr als knapp die Hälfte des Bildschirms, Knöpfe immer sichtbar */
+.ask:not(.live-ask) { max-height: 45vh; overflow-y: auto; overscroll-behavior: contain; }
+.ask:not(.live-ask) .row { position: sticky; bottom: -12px; background: inherit; padding: 8px 0 12px; margin-bottom: -12px; }
+.ask .req-box { margin: 6px 0 0; font-size: 12.5px; }
+.ask .req-box summary { cursor: pointer; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ask .req-box summary code { color: var(--text, inherit); }
+.ask .req-box pre.req { max-height: 30vh; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+@media (max-width: 700px) { .ask:not(.live-ask) { max-height: 55vh; } }
+/* Kopfzeile eines Chats: „Nächster Schritt“ höchstens zwei Zeilen */
+.chat-head .sub { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

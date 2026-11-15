@@ -258,6 +258,11 @@ async function api(req, url) {
       }
       if (typeof body.browser === 'boolean') project.browser = body.browser;
       if (typeof body.computerUse === 'boolean') project.computerUse = body.computerUse;
+      if (typeof body.zentrale === 'boolean') {
+        // Es gibt genau eine Zentrale.
+        if (body.zentrale) for (const other of state.projects) other.zentrale = false;
+        project.zentrale = body.zentrale;
+      }
       if (typeof body.laptop === 'boolean') {
         // Es gibt genau ein Laptop-Projekt.
         if (body.laptop) for (const other of state.projects) other.laptop = false;
@@ -276,7 +281,11 @@ async function api(req, url) {
       const text = String(body.text || '').trim();
       if (!project) throw httpError(400, 'Projekt fehlt');
       if (!text) throw httpError(400, 'Auftrag fehlt');
-      const chat = newChat(project, clean(body.title, 80) || text.split('\n')[0].slice(0, 60));
+      // Modell und Aufwand für diesen Chat; leer heißt Vorgabe des Projekts (sonst Opus, medium).
+      const choice = {};
+      if (MODELS.includes(body.model) && body.model) choice.model = body.model;
+      if (EFFORTS.includes(body.effort) && body.effort) choice.effort = body.effort;
+      const chat = newChat(project, clean(body.title, 80) || text.split('\n')[0].slice(0, 60), choice);
       sendMessage(chat, body.kind === 'meeting' ? MEETING_PREFIX + text : text, text);
       return chat;
     }
@@ -294,6 +303,9 @@ async function api(req, url) {
     }
     if (method === 'PATCH') {
       if (typeof body.title === 'string' && body.title.trim()) chat.title = clean(body.title, 80);
+      // Modell und Aufwand gelten ab dem nächsten Zug; '' setzt auf die Vorgabe des Projekts zurück.
+      if (MODELS.includes(body.model)) { if (body.model) chat.model = body.model; else delete chat.model; }
+      if (EFFORTS.includes(body.effort)) { if (body.effort) chat.effort = body.effort; else delete chat.effort; }
       chatChanged(chat);
       return chat;
     }
@@ -587,7 +599,24 @@ const handle = async (req, res) => {
       }
       const type = FILE_TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream';
       const active = ['text/html', 'image/svg+xml', 'text/xml'].includes(type);
+      const size = fs.statSync(file).size;
+      const range = /^(video|audio)\//.test(type) && String(req.headers.range || '').match(/^bytes=(\d*)-(\d*)$/);
+      if (range && (range[1] || range[2])) {
+        let start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+        let end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+        if (start > end || start >= size) {
+          res.writeHead(416, { 'Content-Range': `bytes */${size}` }).end();
+          return;
+        }
+        res.writeHead(206, {
+          'Content-Type': type, 'Content-Length': end - start + 1, 'Content-Range': `bytes ${start}-${end}/${size}`,
+          'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+        });
+        fs.createReadStream(file, { start, end }).pipe(res);
+        return;
+      }
       res.writeHead(200, {
+        ...(/^(video|audio)\//.test(type) ? { 'Accept-Ranges': 'bytes', 'Content-Length': size } : {}),
         'Content-Type': /^text\/|json|svg|javascript/.test(type) ? `${type}; charset=utf-8` : type,
         'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff',

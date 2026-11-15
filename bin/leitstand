@@ -8,6 +8,19 @@ if [ -z "${LEITSTAND_URL:-}" ] || [ -z "${LEITSTAND_RUN:-}" ]; then
   exit 2
 fi
 
+# leitstand auftrag TITEL [modell=…] [aufwand=…]: Text über stdin
+order() {
+  local title="$1"; shift
+  local fields=(--data-urlencode "titel=$title")
+  for pair in "$@"; do
+    case "$pair" in
+      modell=* | model=* | aufwand=* | effort=*) fields+=(--data-urlencode "$pair") ;;
+      *) echo "leitstand auftrag: unbekannte Angabe „$pair“ (erlaubt: modell=…, aufwand=…)" >&2; exit 2 ;;
+    esac
+  done
+  call auftrag "${fields[@]}" --data-urlencode "text@-"
+}
+
 call() {
   local path="$1"
   shift
@@ -32,11 +45,16 @@ leitstand tresor 2fa NAME | notiz NAME                (Wert über stdin; 2fa mit
 leitstand tresor loeschen NAME                        (fremde Einträge erst nach Freigabe durch den Menschen)
 leitstand tell PROJEKTNAME NACHRICHT
 leitstand laeufe | laeufe weiter IDS|alle | laeufe erledigt IDS|alle   (vom Menschen gestoppte Läufe, nur auf seine Anweisung)
-leitstand auftrag TITEL                               (Auftragstext über stdin)
+leitstand auftrag TITEL [modell=opus|sonnet|haiku|fable] [aufwand=low|medium|high|xhigh|max]
+                                                      (Auftragstext über stdin; Vorgabe: opus, medium)
+leitstand auftraege modell IDS|alle [modell=…] [aufwand=…]   (Modell eigener Teilaufträge ab ihrem nächsten Zug)
 leitstand auftraege | auftraege stopp IDS|alle | auftraege weiter IDS|alle
 leitstand auftraege pause IDS|alle [bis=reset|HH:MM|MINUTEN]   (eigene Teilaufträge anhalten)
 leitstand budget                                      (Abo-Kontingent: Auslastung, Rücksetzzeit, Empfehlung)
 leitstand laptop TITEL                                (Auftrag an den Mac des Menschen, Text über stdin)
+leitstand projekte                                    (Projekte mit ihren letzten Chats)
+leitstand weitergeben PROJEKT TITEL | nachreichen CHATID | verteilt   (nur Zentrale, Text über stdin)
+leitstand lesen CHATID [ANZAHL] | suchen BEGRIFF      (nur Zentrale: Gesamtkontext bei Bedarf)
 leitstand hilfe TEXT | hilfe erledigt                 (Klick im Livebild deines Browsers)
 leitstand uebergabe URL TEXT                          (Mensch erledigt es im eigenen Browser)
 leitstand stand TEXT                                  (Zwischenstand bei langen Schritten)
@@ -76,12 +94,23 @@ case "${1:-}:${2:-}" in
   tresor:loeschen) call tresor/loeschen --data-urlencode "name=${3:?NAME fehlt}" ;;
   tresor:notiz) call tresor/notiz --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "wert@-" ;;
   auftrag:stopp | auftrag:pause | auftrag:weiter)
-    if [ -n "${3:-}" ]; then a="$2"; shift 2; call "auftraege/$a" --data-urlencode "ids=$*"
-    else call auftrag --data-urlencode "titel=$2" --data-urlencode "text@-"; fi ;;
+    if [ -n "${3:-}" ] && [[ "$3" != *=* ]]; then a="$2"; shift 2; call "auftraege/$a" --data-urlencode "ids=$*"
+    else shift; order "$@"; fi ;;
+  auftraege:modell)
+    shift 2
+    ids=(); fields=()
+    for w in "$@"; do case "$w" in *=*) fields+=(--data-urlencode "$w") ;; *) ids+=("$w") ;; esac; done
+    call auftraege/modell --data-urlencode "ids=${ids[*]:?IDS oder alle fehlt}" "${fields[@]}" ;;
   auftraege:stopp | auftraege:pause | auftraege:weiter) a="$2"; shift 2; call "auftraege/$a" --data-urlencode "ids=${*:?IDS oder alle fehlt}" ;;
   budget:*) call budget ;;
-  auftrag:*) call auftrag --data-urlencode "titel=${2:?TITEL fehlt}" --data-urlencode "text@-" ;;
+  auftrag:*) shift; [ -n "${1:-}" ] || { echo "TITEL fehlt" >&2; exit 2; }; order "$@" ;;
   auftraege:*) call auftraege ;;
+  projekte:*) call projekte ;;
+  weitergeben:*) call weitergeben --data-urlencode "projekt=${2:?PROJEKT fehlt}" --data-urlencode "titel=${3:?TITEL fehlt}" --data-urlencode "text@-" ;;
+  nachreichen:*) call nachreichen --data-urlencode "chat=${2:?CHATID fehlt}" --data-urlencode "text@-" ;;
+  verteilt:*) call verteilt ;;
+  lesen:*) call lesen --data-urlencode "chat=${2:?CHATID fehlt}" --data-urlencode "anzahl=${3:-}" ;;
+  suchen:*) shift; call suchen --data-urlencode "begriff=${*:?BEGRIFF fehlt}" ;;
   laptop:*) call laptop --data-urlencode "titel=${2:?TITEL fehlt}" --data-urlencode "text@-" ;;
   ergebnis:*) call ergebnis --data-urlencode "titel=${2:?TITEL fehlt}" --data-urlencode "ziel=${3:?ZIEL fehlt}" --data-urlencode "text=${4:-}" ;;
   stand:*) call stand --data-urlencode "text=${2:?TEXT fehlt}" ;;

@@ -55,7 +55,9 @@ function inline(s) {
   return esc(s)
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(/\[([^\]]+)\]\((\/files\/[^\s)]+\.(?:mp4|webm|mov))\)/gi, '<video src="$2" style="max-width:100%;max-height:60vh;border-radius:8px;background:#000" controls preload="metadata" playsinline></video><br><a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/\[([^\]]+)\]\((\/files\/[^\s)]+\.(?:mp3|m4a|wav|ogg))\)/gi, '<audio src="$2" controls preload="metadata"></audio><br><a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/\[([^\]]+)\]\(((?:https?:\/\/|\/files\/)[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 
 // Kleines Markdown: Überschriften, Listen, Code, Absätze. Alles wird vorher maskiert.
@@ -418,6 +420,8 @@ $('#overview').addEventListener('click', (event) => {
 
 const TEXT_FILE = /\.(md|txt|csv|json|js|mjs|ts|tsx|jsx|css|py|sh|yml|yaml|toml|xml|env|sql)$/i;
 const IMAGE_FILE = /\.(png|jpe?g|webp|gif|svg|ico)$/i;
+const VIDEO_FILE = /\.(mp4|webm|mov)$/i;
+const AUDIO_FILE = /\.(mp3|m4a|wav|ogg)$/i;
 
 async function openFiles(projectId, relative = '', file = null) {
   const local = S.projects.filter((p) => machineOf(p)?.kind === 'local');
@@ -472,6 +476,8 @@ async function renderFilePreview() {
   let body;
   if (/\.html?$/i.test(target)) body = `<iframe class="preview-frame" src="${url}" sandbox="allow-scripts allow-forms allow-popups"></iframe>`;
   else if (IMAGE_FILE.test(target)) body = `<div class="page-body"><img src="${url}" alt="" style="max-width:100%"></div>`;
+  else if (VIDEO_FILE.test(target)) body = `<div class="page-body"><video src="${url}" controls preload="metadata" playsinline style="width:100%;max-height:80vh;background:#000"></video></div>`;
+  else if (AUDIO_FILE.test(target)) body = `<div class="page-body"><audio src="${url}" controls preload="metadata" style="width:100%"></audio></div>`;
   else if (/\.pdf$/i.test(target)) body = `<iframe class="preview-frame" src="${url}"></iframe>`;
   else if (TEXT_FILE.test(target)) {
     const text = await fetch(url).then((r) => r.text()).catch(() => '');
@@ -630,7 +636,8 @@ function renderChatList() {
     (S.chatFilter === 'warten' && c.status === 'attention' && !isSnoozed(c)) ||
     (S.chatFilter === 'laufen' && ['running', 'queued', 'waiting'].includes(c.status));
   const html = [];
-  for (const project of S.projects) {
+  const ordered = [...S.projects.filter((p) => p.zentrale), ...S.projects.filter((p) => !p.zentrale)];
+  for (const project of ordered) {
     const mine = all.filter((c) => c.projectId === project.id && visible(c));
     const isChild = (c) => c.parentId && mine.some((p) => p.id === c.parentId);
     // Neueste Aufträge oben, darunter jeweils ihre Teilaufträge in der Reihenfolge der Vergabe.
@@ -639,7 +646,7 @@ function renderChatList() {
       .sort((a, b) => b.createdAt - a.createdAt)
       .flatMap((c) => [c, ...mine.filter((k) => k.parentId === c.id).sort((a, b) => a.createdAt - b.createdAt)]);
     if (!chats.length && S.chatFilter !== 'alle') continue;
-    html.push(`<div class="group-title"><span>${esc(project.name)}</span><span>${esc(machineOf(project)?.kind === 'ssh' ? machineOf(project).name : '')}</span></div>`);
+    html.push(`<div class="group-title ${project.zentrale ? 'zentrale' : ''}"><span>${esc(project.name)}</span><span class="group-side">${project.zentrale ? 'verteilt an die Projekte' : esc(machineOf(project)?.kind === 'ssh' ? machineOf(project).name : '')}<button class="group-add" data-new="${project.id}" title="Neuer Chat in „${esc(project.name)}“" aria-label="Neuer Chat in ${esc(project.name)}">+</button></span></div>`);
     if (!chats.length) html.push('<p class="hint">Noch kein Auftrag.</p>');
     for (const chat of chats) {
       const meta =
@@ -740,22 +747,33 @@ function updateChat(forceScroll = false) {
   const kids = childrenOf(chat);
   const kidsOpen = kids.filter((c) => ['running', 'queued'].includes(c.status)).length;
   const parent = chat.parentId && S.chats.get(chat.parentId);
-  const sub = [project?.name, machine?.kind === 'ssh' ? machine.name : '', parent ? `Teilauftrag von „${parent.title}“` : 'Lead-Agent', kids.length ? `${kids.length} Teilaufträge, ${kidsOpen} laufen` : '', chat.attention?.naechster_schritt ? `Nächster Schritt: ${chat.attention.naechster_schritt}` : '']
+  const sub = [project?.name, machine?.kind === 'ssh' ? machine.name : '', chat.viaZentrale ? 'über die Zentrale' : '', project?.zentrale ? 'verteilt nur, ohne Vorgeschichte' : '', parent ? `Teilauftrag von „${parent.title}“` : 'Lead-Agent', kids.length ? `${kids.length} Teilaufträge, ${kidsOpen} laufen` : '', chat.attention?.naechster_schritt ? `Nächster Schritt: ${chat.attention.naechster_schritt}` : '']
     .filter(Boolean).map(esc).join(' · ');
-  $('#chat-head').innerHTML = `
+  // Während eine Modellauswahl offen ist, nicht neu zeichnen, sonst klappt sie zu.
+  if (!document.activeElement?.closest?.('#chat-head select')) $('#chat-head').innerHTML = `
     <button class="ghost back" data-a="back" aria-label="Zurück zur Liste">←</button>
     <div class="grow">
       <h1>${esc(chat.title)}</h1>
       <div class="sub">${sub}</div>
     </div>
     ${chat.crew ? `<span class="badge">Crew ${chat.crew}</span>` : ''}
+    <span class="model-pick" title="Modell und Aufwand dieses Chats, gilt ab dem nächsten Zug">
+      <select data-pick="model" aria-label="Modell">${modelOptions(chat.model || '', projectOf(chat)?.model || 'opus')}</select>
+      <select data-pick="effort" aria-label="Aufwand">${effortOptions(chat.effort || '', projectOf(chat)?.effort || 'medium')}</select>
+    </span>
+    <button data-a="new" title="Neuen Chat in „${esc(project?.name || '')}“ starten">+ Chat</button>
     <span class="badge"><span class="dot ${dotClass(chat)}"></span>${esc(statusText)}</span>
     ${chat.status === 'running' && project?.browser && !chat.assist ? `<button data-a="live" title="Den Browser des Agenten live ansehen">${S.liveOpen === chat.id ? 'Browser schließen' : 'Browser'}</button>` : ''}
     ${['running', 'queued', 'waiting'].includes(chat.status) ? '<button data-a="stop">Stoppen</button>' : ''}
     <button class="ghost" data-a="archive" title="Aus der Liste entfernen">Archivieren</button>`;
+  $('#chat-head').onchange = (event) => {
+    const pick = event.target.closest('select[data-pick]')?.dataset.pick;
+    if (pick) run(api('PATCH', `/api/chats/${chat.id}`, { [pick]: event.target.value }).then((c) => { S.chats.set(c.id, c); updateChat(); }));
+  };
   $('#chat-head').onclick = (event) => {
     const a = event.target.closest('button')?.dataset.a;
     if (a === 'back') selectChat(null);
+    if (a === 'new') newChatDialog({ projectId: chat.projectId });
     if (a === 'stop') act(chat.id, 'stop');
     if (a === 'live') {
       S.liveOpen = S.liveOpen === chat.id ? null : chat.id;
@@ -1030,7 +1048,13 @@ function renderAsk(chat) {
   buttons.push('<button class="ghost" data-a="snooze">Später</button>');
   if (a.kind !== 'fertig') buttons.push('<button class="ghost" data-a="done">Nicht mehr nötig</button>');
 
-  const requests = (a.requests || []).map((r) => `<pre class="req"><code>${esc(r.tool)}: ${esc(r.detail)}</code></pre>`).join('');
+  // Verweigerte Schritte sind oft lange Befehle: eingeklappt, nur die erste Zeile als Vorschau.
+  const requests = (a.requests || []).map((r) => {
+    const detail = String(r.detail || '');
+    const lines = detail.split('\n').length;
+    const first = detail.split('\n')[0].slice(0, 90);
+    return `<details class="req-box"><summary>Verweigerter Schritt · ${esc(r.tool)}${lines > 1 ? ` · ${lines} Zeilen` : ''}: <code>${esc(first)}${detail.length > first.length ? ' …' : ''}</code></summary><pre class="req"><code>${esc(detail)}</code></pre></details>`;
+  }).join('');
   const notes = [];
   if (a.requests?.length) {
     notes.push(projectOf(chat)?.mode === 'vorsichtig'
@@ -1086,6 +1110,20 @@ function openDialog(html, onSubmit, submitLabel = 'Anlegen') {
   return dialog;
 }
 
+// Modell und Aufwand: '' heißt Vorgabe des Projekts (in der Regel Opus, medium).
+const MODEL_NAMES = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
+const EFFORT_NAMES = { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' };
+const modelOptions = (value, fallback = 'opus') =>
+  `<option value="">Vorgabe (${esc(MODEL_NAMES[fallback] || fallback)})</option>` +
+  Object.entries(MODEL_NAMES).map(([k, v]) => `<option value="${k}" ${k === value ? 'selected' : ''}>${v}</option>`).join('');
+const effortOptions = (value, fallback = 'medium') =>
+  `<option value="">Vorgabe (${esc(fallback)})</option>` +
+  Object.entries(EFFORT_NAMES).map(([k, v]) => `<option value="${k}" ${k === value ? 'selected' : ''}>${v}</option>`).join('');
+const chatModel = (chat) => {
+  const p = projectOf(chat);
+  return { model: chat.model || p?.model || 'opus', effort: chat.effort || p?.effort || 'medium' };
+};
+
 function newChatDialog(preset = null) {
   if (preset instanceof Event) preset = null;
   if (!S.projects.length) {
@@ -1095,14 +1133,18 @@ function newChatDialog(preset = null) {
   }
   // Ein Auftrag mit Browser gehört auf diesen Rechner: Dort ist Chrome vorhanden.
   const localProject = S.projects.find((p) => machineOf(p)?.kind === 'local')?.id;
-  const current = preset?.browser ? localProject : S.chats.get(S.chatId)?.projectId;
+  const current = preset?.projectId || (preset?.browser ? localProject : S.chats.get(S.chatId)?.projectId);
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const dialog = openDialog(
-    `<h2>Neuer Auftrag</h2>
+    `<h2>${preset?.projectId ? `Neuer Chat in „${esc(S.projects.find((p) => p.id === preset.projectId)?.name || '')}“` : 'Neuer Auftrag'}</h2>
     <label>Projekt<select name="projectId" id="chat-project">${S.projects.map((p) => `<option value="${p.id}" ${p.id === current ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}<option value="">+ Neues Projekt</option></select></label>
     <label id="chat-new-project" hidden>Name des neuen Projekts<input name="projectName" maxlength="60"></label>
     <label>Art<select name="kind" id="chat-kind"><option value="auftrag">Auftrag</option><option value="meeting">Gespräch: Aufträge ableiten und zur Freigabe vorlegen</option></select></label>
     <label>Titel (optional)<input name="title" maxlength="80" value="${esc(preset?.title || '')}"></label>
+    <div class="row-2">
+      <label>Modell<select name="model" id="chat-model">${modelOptions('')}</select></label>
+      <label>Aufwand<select name="effort" id="chat-effort">${effortOptions('')}</select></label>
+    </div>
     <label><span id="chat-text-label">Was soll erreicht werden?</span><textarea name="text" id="chat-text" rows="7" required placeholder="Ziel, gewünschtes Ergebnis, Grenzen. Je klarer das fertige Ergebnis beschrieben ist, desto weniger Rückfragen.">${esc(preset?.text || '')}</textarea></label>
     ${preset?.browser ? '<p class="note" style="margin:0">Mit „Starten“ bekommt dieses Projekt den eigenen Browser freigeschaltet. Der Agent öffnet damit fremde Webseiten und füllt dort Formulare aus. Er nutzt ein leeres Browserprofil, nicht deine Anmeldungen.</p>' : ''}
     <div id="record-row" hidden>
@@ -1129,7 +1171,17 @@ function newChatDialog(preset = null) {
   let recording = false;
   const textarea = $('#chat-text');
   const button = $('#record');
+  // Die Vorgabe im Modell-Feld zeigt, was das gewählte Projekt nimmt.
+  const showDefaults = () => {
+    const p = S.projects.find((x) => x.id === $('#chat-project').value);
+    const m = $('#chat-model').value;
+    const e = $('#chat-effort').value;
+    $('#chat-model').innerHTML = modelOptions(m, p?.model || 'opus');
+    $('#chat-effort').innerHTML = effortOptions(e, p?.effort || 'medium');
+  };
+  showDefaults();
   $('#chat-project').onchange = (event) => {
+    showDefaults();
     $('#chat-new-project').hidden = event.target.value !== '';
     if (!event.target.value) $('#chat-new-project input').focus();
   };
@@ -1296,6 +1348,7 @@ function renderProjects() {
       <div class="checks">
         <span class="note" style="margin:0">Der Agent darf nutzen:</span>
         <label><input type="checkbox" data-browser ${p.browser ? 'checked' : ''}>Browser</label>
+        <label title="Ein Chat für alles: verteilt deine Nachrichten an die passenden Projekte, arbeitet selbst nichts aus und hat kaum Kontext."><input type="checkbox" data-zentrale ${p.zentrale ? 'checked' : ''}>Zentrale</label>
         ${machine?.info?.os === 'darwin' ? `<label title="Der Agent bedient den Mac: Bildschirm sehen, klicken, tippen, Programme (Peekaboo). Braucht die Peekaboo-App mit Bildschirmaufnahme und Bedienungshilfen."><input type="checkbox" data-computer ${p.computerUse ? 'checked' : ''}>Computer Use</label>
         <label title="Agenten anderer Projekte schicken diesem Projekt Aufträge, die nur auf deinem Mac gehen (leitstand laptop)."><input type="checkbox" data-laptop ${p.laptop ? 'checked' : ''}>Nimmt Laptop-Aufträge an</label>` : ''}
         ${machine?.kind === 'local' ? `<label title="Deine persönliche ~/.claude/CLAUDE.md, etwa die Regeln zu deinem Second Brain"><input type="checkbox" data-personal ${p.personal ? 'checked' : ''}>Meine CLAUDE.md</label>` : ''}
@@ -1327,6 +1380,8 @@ $('#projects').addEventListener('change', (event) => {
     run(api('PATCH', `/api/projects/${project.id}`, { [field]: event.target.value }));
   } else if ('personal' in event.target.dataset) {
     run(api('PATCH', `/api/projects/${project.id}`, { personal: event.target.checked }));
+  } else if ('zentrale' in event.target.dataset) {
+    run(api('PATCH', `/api/projects/${project.id}`, { zentrale: event.target.checked }));
   } else if ('computer' in event.target.dataset) {
     run(api('PATCH', `/api/projects/${project.id}`, { computerUse: event.target.checked }));
   } else if ('laptop' in event.target.dataset) {
@@ -1524,7 +1579,7 @@ function renderFleet() {
   $('#add-machine').onclick = addMachineDialog;
   $('#add-server').onclick = addServerDialog;
   $('#add-account').onclick = addAccountDialog;
-  $('#copy-key').onclick = (event) => navigator.clipboard.writeText(S.publicKey).then(() => (event.target.textContent = 'Kopiert'));
+  $('#copy-key').onclick = (event) => copyText(S.publicKey).then(() => (event.target.textContent = 'Kopiert'));
 }
 
 $('#fleet').addEventListener('change', (event) => {
@@ -1668,6 +1723,56 @@ async function showMail(mailId) {
 const scopeName = (scope) => (scope === 'alle' ? 'alle Projekte' : S.projects.find((p) => p.id === scope)?.name || 'gelöschtes Projekt');
 const reveal = (loginId) => api('POST', `/api/vault/${loginId}/reveal`);
 
+// In die Zwischenablage kopieren, auch ohne HTTPS (Aufruf über die Tailscale-Adresse) und in
+// Safari, das die Klick-Berechtigung verliert, während der Wert erst vom Server kommt.
+// value: Text oder Promise auf Text. Gibt den kopierten Text zurück.
+async function copyText(value) {
+  const pending = Promise.resolve(value).then(String);
+  if (window.isSecureContext && navigator.clipboard) {
+    // ClipboardItem mit Promise: wird synchron im Klick angemeldet, der Inhalt darf nachkommen.
+    if (window.ClipboardItem && navigator.clipboard.write) {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ 'text/plain': pending.then((t) => new Blob([t], { type: 'text/plain' })) })]);
+        return pending;
+      } catch {}
+    }
+    try {
+      const text = await pending;
+      await navigator.clipboard.writeText(text);
+      return text;
+    } catch {}
+  }
+  const text = await pending;
+  // Ohne sichere Verbindung: der alte Weg über ein unsichtbares Textfeld.
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;';
+  document.body.appendChild(area);
+  area.focus();
+  area.select();
+  area.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch {}
+  area.remove();
+  if (!ok) copyByHand(text);
+  return text;
+}
+
+// Letzter Ausweg: Wert markiert anzeigen, der Mensch drückt ⌘C / Strg+C.
+function copyByHand(text) {
+  openDialog(
+    `<h2>Kopieren</h2><p class="note">Der Browser lässt das automatische Kopieren hier nicht zu. Der Wert ist markiert: ⌘C bzw. Strg+C drücken.</p>
+    <input id="copy-by-hand" readonly value="${esc(text)}" style="font-family:ui-monospace,monospace">`,
+    async () => {},
+    'Fertig',
+  );
+  const input = $('#copy-by-hand');
+  input.focus();
+  input.select();
+  input.addEventListener('copy', () => setTimeout(() => $('#dialog').close(), 150));
+}
+
 function renderVault() {
   if (document.activeElement?.id === 'vault-search' && $('#vault-list')) return renderVaultList();
   $('#vault').innerHTML = `<div class="inner">
@@ -1725,14 +1830,15 @@ $('#vault').addEventListener('click', async (event) => {
   };
   try {
     if (action === 'copy-user') {
-      await navigator.clipboard.writeText(entry.user);
+      await copyText(entry.user);
       flash('Kopiert');
     } else if (action === 'copy-password') {
-      await navigator.clipboard.writeText((await reveal(entry.id)).password);
+      await copyText(reveal(entry.id).then((d) => d.password));
       flash('Kopiert');
     } else if (action === 'copy-code') {
-      const { totp } = await reveal(entry.id);
-      await navigator.clipboard.writeText(totp.code);
+      const data = reveal(entry.id);
+      await copyText(data.then((d) => d.totp.code));
+      const { totp } = await data;
       flash(`${totp.code} · noch ${totp.remaining} s`);
     } else if (action === 'show') {
       const box = card.querySelector('.revealed');
@@ -1946,6 +2052,8 @@ $('#chat-filter').onclick = (event) => {
   renderChatList();
 };
 $('#chat-list').onclick = (event) => {
+  const add = event.target.closest('[data-new]')?.dataset.new;
+  if (add) return newChatDialog({ projectId: add });
   const chatId = event.target.closest('[data-chat]')?.dataset.chat;
   if (chatId) selectChat(chatId);
 };
