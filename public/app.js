@@ -676,6 +676,7 @@ function buildChat() {
     <div id="ask"></div>
     <form class="composer" id="composer">
       <textarea id="composer-input" rows="1" placeholder="Nachricht an deinen Lead-Agenten (Enter sendet, Umschalt+Enter für neue Zeile)"></textarea>
+      <button type="button" id="composer-interrupt" hidden title="Bricht den laufenden Schritt ab. Steht Text im Feld, bearbeitet der Agent ihn sofort danach (Esc).">Unterbrechen</button>
       <button class="primary" type="submit">Senden</button>
     </form>`;
   const input = $('#composer-input');
@@ -694,6 +695,23 @@ function buildChat() {
     event.preventDefault();
     send();
   };
+  const interrupt = async () => {
+    const text = input.value.trim();
+    input.value = '';
+    try {
+      await api('POST', `/api/chats/${chat.id}/action`, { action: 'interrupt', text });
+    } catch (err) {
+      input.value = text;
+      alert(err.message);
+    }
+  };
+  $('#composer-interrupt').onclick = interrupt;
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && S.chats.get(chat.id)?.status === 'running') {
+      event.preventDefault();
+      interrupt();
+    }
+  });
   input.onkeydown = (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
@@ -755,7 +773,7 @@ function updateChat(forceScroll = false) {
   );
   if (chat.status === 'running') {
     const lastMove = chat.messages.length ? chat.messages[chat.messages.length - 1].ts : chat.createdAt;
-    html.push(`<div class="working"><span class="dot running"></span>${chat.progress ? `<b>${esc(chat.progress.text)}</b> · ` : ''}${esc(chat.activity || 'Arbeitet …')} · letzte Regung ${esc(ago(lastMove))}${chat.pending?.length ? ` · ${chat.pending.length} Nachricht(en) warten` : ''}</div>`);
+    html.push(`<div class="working"><span class="dot running"></span>${chat.progress ? `<b>${esc(chat.progress.text)}</b> · ` : ''}${esc(chat.activity || 'Arbeitet …')} · letzte Regung ${esc(ago(lastMove))}${chat.pending?.length ? ` · ${chat.pending.length} Nachricht(en) folgen gleich` : ''}</div>`);
   } else if (chat.status === 'queued') {
     html.push(`<div class="working"><span class="dot queued"></span>${esc(chat.queued?.reason || 'Startet gleich …')}</div>`);
   } else if (chat.status === 'waiting') {
@@ -763,6 +781,12 @@ function updateChat(forceScroll = false) {
   }
   $('#messages-inner').innerHTML = html.join('');
   if (forceScroll || nearBottom) box.scrollTop = box.scrollHeight;
+
+  const running = chat.status === 'running';
+  $('#composer-interrupt').hidden = !running;
+  $('#composer-input').placeholder = running
+    ? 'Kommt sofort beim Agenten an (Enter) · Esc unterbricht'
+    : 'Nachricht an deinen Lead-Agenten (Enter sendet, Umschalt+Enter für neue Zeile)';
 
   renderAsk(chat);
 }

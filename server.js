@@ -11,7 +11,7 @@ import {
   addClient, id, findChat, findProject, findMachine, findAccount, httpError, readRaw,
 } from './lib/store.js';
 import {
-  sendMessage, stopRun, stopAll, newChat, publicKey, addMachine, removeMachine, setupMachine, pushTokens, pump, browserStream,
+  sendMessage, stopRun, stopAll, newChat, publicKey, addMachine, removeMachine, setupMachine, pushTokens, pump, browserStream, interruptRun,
 } from './lib/runs.js';
 import { MEETING_PREFIX } from './lib/agent.js';
 import { listPages, readPage, writePage } from './lib/pages.js';
@@ -111,6 +111,9 @@ function chatAction(chat, body) {
       chat.attention = null;
       chat.queued = null;
       chatChanged(chat);
+      return;
+    case 'interrupt':
+      interruptRun(chat, typeof body.text === 'string' ? body.text.slice(0, 20000) : '');
       return;
     case 'stop':
       stopRun(chat);
