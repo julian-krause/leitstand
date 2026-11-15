@@ -1,0 +1,627 @@
+// Leitstand: führt viele Claude-Code-Agenten über eine Oberfläche statt über Terminals.
+// Keine Abhängigkeiten. Start: node server.js
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import os from 'node:os';
+import {
+  state, secrets, ROOT, DATA_DIR, CONTEXT_DIR, PORT, AGENT_PORT, publicState, saveNow, saveSecrets, changed, chatChanged,
+  addClient, id, findChat, findProject, findMachine, findAccount, httpError, readRaw,
+} from './lib/store.js';
+import {
+  sendMessage, stopRun, stopAll, newChat, publicKey, addMachine, removeMachine, setupMachine, pushTokens, pump,
+} from './lib/runs.js';
+import { MEETING_PREFIX } from './lib/agent.js';
+import { listPages, readPage, writePage } from './lib/pages.js';
+import { agentApi, listMail, readMail, listSms, decidePayment } from './lib/identity.js';
+import { listTypes, createServer, deleteServer } from './lib/hetzner.js';
+import { loginById, createLogin, updateLogin, deleteLogin, totpCode } from './lib/vault.js';
+import { overview, listDir, resolveInProject, FILE_TYPES } from './lib/files.js';
+import { upsertSubscription, removeSubscription } from './lib/subs.js';
+
+const PUBLIC_DIR = path.join(ROOT, 'public');
+const HOST = '127.0.0.1';
+const SNOOZE_MS = 60 * 60 * 1000;
+const MODES = ['selbststaendig', 'vorsichtig', 'autonom'];
+const MODELS = ['', 'fable', 'opus', 'sonnet', 'haiku'];
+const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+// ---------- Aktionen aus der Warteschlange ----------
+
+function chatAction(chat, body) {
+  const attention = chat.attention || {};
+  switch (body.action) {
+    case 'approve': {
+      const option = typeof body.option === 'string' ? body.option.trim() : '';
+      sendMessage(
+        chat,
+        option ? `Entscheidung: ${option}. Setz das um.` : 'Freigegeben. Mach mit dem nächsten Schritt weiter.',
+        option ? `Entscheidung: ${option}` : 'Freigegeben',
+      );
+      return;
+    }
+    case 'allow': {
+      const project = findProject(chat.projectId);
+      const requests = attention.requests || [];
+      if (project.mode === 'vorsichtig') {
+        // Im vorsichtigen Modus gilt die Erlaubnis ab dann für das ganze Projekt.
+        const patterns = requests.flatMap((r) => r.patterns);
+        project.allow = [...new Set([...(project.allow || []), ...patterns])];
+        changed('projects');
+        sendMessage(
+          chat,
+          `Die Erlaubnis ist erteilt (${patterns.join(', ')}). Führ den abgelehnten Schritt jetzt aus und mach weiter.`,
+          `Erlaubt: ${patterns.join(', ')}`,
+        );
+      } else {
+        // Sonst gilt sie genau für diese Schritte in diesem Chat.
+        const list = requests.map((r) => `- ${r.tool}${r.detail ? `: ${r.detail}` : ''}`).join('\n');
+        sendMessage(
+          chat,
+          `Ich gebe genau diese Schritte ausdrücklich frei:\n${list}\nFühr sie jetzt aus und mach weiter.`,
+          `Freigegeben:\n${list}`,
+        );
+      }
+      return;
+    }
+    case 'deny':
+      sendMessage(chat, 'Diese Erlaubnis bekommst du nicht. Finde einen anderen Weg oder sag mir, was dir fehlt.', 'Erlaubnis abgelehnt');
+      return;
+    case 'pay-approve':
+    case 'pay-deny': {
+      const payment = state.payments.find((p) => p.id === (body.paymentId || attention.payment?.id) && p.chatId === chat.id && p.status === 'wartet');
+      if (!payment) throw httpError(400, 'Diese Zahlung ist nicht mehr offen.');
+      const approve = body.action === 'pay-approve';
+      decidePayment(payment, approve);
+      sendMessage(
+        chat,
+        approve
+          ? `Die Zahlung ${payment.id} ist freigegeben. Hol die Kartendaten mit \`leitstand pay abrufen ${payment.id}\` und schließ den Kauf ab.`
+          : `Die Zahlung ${payment.id} ist abgelehnt. Kauf das nicht. Sag mir, wie es ohne diese Ausgabe weitergeht.`,
+        approve ? `Zahlung freigegeben: ${payment.amount.toFixed(2)} ${payment.currency} an ${payment.merchant}` : 'Zahlung abgelehnt',
+      );
+      return;
+    }
+    case 'retry':
+      sendMessage(chat, 'Der letzte Lauf ist abgebrochen. Prüf den Stand und mach dort weiter.', 'Nochmal versuchen');
+      return;
+    case 'snooze':
+      chat.snoozeUntil = Date.now() + SNOOZE_MS;
+      chatChanged(chat);
+      return;
+    case 'done':
+      chat.status = 'done';
+      chat.attention = null;
+      chat.snoozeUntil = null;
+      chatChanged(chat);
+      return;
+    case 'archive':
+      stopRun(chat);
+      chat.status = 'archived';
+      chat.attention = null;
+      chat.queued = null;
+      chatChanged(chat);
+      return;
+    case 'stop':
+      stopRun(chat);
+      return;
+    default:
+      throw httpError(400, 'Unbekannte Aktion');
+  }
+}
+
+// ---------- Schnittstelle der Oberfläche ----------
+
+const expandHome = (dir) => (dir.startsWith('~') ? path.join(process.env.HOME || '', dir.slice(1)) : dir);
+const clean = (value, max = 200) => String(value ?? '').trim().slice(0, max);
+
+function updateSettings(section, body) {
+  const s = state.settings;
+  switch (section) {
+    case 'mail':
+      s.mail = {
+        address: clean(body.address),
+        imapHost: clean(body.imapHost),
+        imapPort: Number(body.imapPort) || 993,
+        smtpHost: clean(body.smtpHost),
+        smtpPort: Number(body.smtpPort) || 465,
+        user: clean(body.user) || clean(body.address),
+      };
+      if (body.password) secrets.mail.password = String(body.password);
+      break;
+    case 'sms':
+      s.sms = {
+        provider: body.provider === 'twilio' ? 'twilio' : 'mail',
+        accountSid: clean(body.accountSid),
+        number: clean(body.number, 30),
+      };
+      if (body.authToken) secrets.sms.authToken = String(body.authToken);
+      break;
+    case 'wallet':
+      s.wallet = {
+        currency: /^[A-Za-z]{3}$/.test(body.currency || '') ? body.currency.toUpperCase() : 'EUR',
+        autoApprove: Math.max(0, Number(body.autoApprove) || 0),
+        monthlyBudget: Math.max(0, Number(body.monthlyBudget) || 0),
+      };
+      if (body.clearCard) secrets.card = null;
+      else if (body.number) {
+        if (!body.expiry || !body.cvc || !body.holder) throw httpError(400, 'Zur Karte gehören Nummer, Ablaufdatum, Prüfziffer und Inhaber.');
+        secrets.card = {
+          number: clean(body.number, 30),
+          expiry: clean(body.expiry, 10),
+          cvc: clean(body.cvc, 6),
+          holder: clean(body.holder, 80),
+          address: clean(body.address, 300),
+        };
+      }
+      break;
+    case 'hetzner':
+      s.hetzner = { location: /^[a-z0-9]{3,6}$/.test(body.location || '') ? body.location : 'nbg1' };
+      if (body.token) secrets.hetzner.token = String(body.token).trim();
+      break;
+    case 'access':
+      s.access = {
+        hosts: String(body.hosts || '').split(/[\s,]+/).map((h) => h.toLowerCase()).filter((h) => /^[a-z0-9.-]+$/.test(h)),
+      };
+      if (body.token) {
+        if (String(body.token).length < 16) throw httpError(400, 'Das Zugangskennwort braucht mindestens 16 Zeichen.');
+        secrets.access.token = String(body.token);
+        sessions.clear();
+      }
+      break;
+    default:
+      throw httpError(404, 'Unbekannter Bereich');
+  }
+  saveSecrets();
+  changed('settings');
+}
+
+async function api(req, url) {
+  const parts = url.pathname.split('/').filter(Boolean).slice(1).map(decodeURIComponent);
+  const method = req.method;
+  let body = {};
+  if (method !== 'GET' && method !== 'DELETE') {
+    try {
+      body = JSON.parse((await readRaw(req)) || '{}');
+    } catch {
+      throw httpError(400, 'Ungültiges JSON');
+    }
+  }
+  const [area, key, sub] = parts;
+
+  if (area === 'state' && method === 'GET') {
+    return { ...publicState(), pages: listPages(), contextDir: CONTEXT_DIR, publicKey: publicKey() };
+  }
+
+  if (area === 'overview' && method === 'GET') return overview();
+
+  if (area === 'projects' && sub === 'files' && method === 'GET') {
+    const project = findProject(key);
+    if (!project) throw httpError(404, 'Projekt nicht gefunden');
+    return listDir(project, url.searchParams.get('path') || '');
+  }
+
+  if (area === 'projects') {
+    if (method === 'POST' && !key) {
+      const name = clean(body.name, 60);
+      const machine = findMachine(body.machineId || 'lokal');
+      if (!name) throw httpError(400, 'Das Projekt braucht einen Namen');
+      if (!machine) throw httpError(400, 'Maschine nicht gefunden');
+      if (state.projects.some((p) => p.name.toLowerCase() === name.toLowerCase())) throw httpError(400, 'Ein Projekt mit diesem Namen gibt es schon');
+      const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'projekt';
+      const rawDir = clean(body.dir, 400) || `~/projekte/${slug}`;
+      const project = {
+        id: id(),
+        name,
+        // Auf dem eigenen Rechner wird der Pfad hier aufgelöst, auf entfernten Maschinen dort.
+        dir: machine.kind === 'local' ? path.resolve(expandHome(rawDir)) : rawDir,
+        machineId: machine.id,
+        mode: MODES.includes(body.mode) ? body.mode : 'selbststaendig',
+        // Vorgabe für neue Projekte: Opus mit mittlerer Gründlichkeit
+        model: 'opus',
+        effort: 'medium',
+        allow: [],
+        identity: { mail: false, sms: false, wallet: false },
+      };
+      if (machine.kind === 'local') fs.mkdirSync(project.dir, { recursive: true });
+      state.projects.push(project);
+      changed('projects');
+      return project;
+    }
+    const project = findProject(key);
+    if (!project) throw httpError(404, 'Projekt nicht gefunden');
+    if (method === 'PATCH') {
+      if (typeof body.name === 'string' && body.name.trim()) project.name = clean(body.name, 60);
+      if (MODES.includes(body.mode)) project.mode = body.mode;
+      if (MODELS.includes(body.model)) project.model = body.model;
+      if (EFFORTS.includes(body.effort)) project.effort = body.effort;
+      if (Array.isArray(body.allow)) project.allow = body.allow.map(String).filter(Boolean);
+      if (body.identity && typeof body.identity === 'object') {
+        project.identity = { mail: Boolean(body.identity.mail), sms: Boolean(body.identity.sms), wallet: Boolean(body.identity.wallet) };
+      }
+      if (typeof body.browser === 'boolean') project.browser = body.browser;
+      if (typeof body.personal === 'boolean') project.personal = body.personal;
+      if (typeof body.browserVisible === 'boolean') project.browserVisible = body.browserVisible;
+      changed('projects');
+      return project;
+    }
+  }
+
+  if (area === 'chats') {
+    if (method === 'POST' && !key) {
+      const project = findProject(body.projectId);
+      const text = String(body.text || '').trim();
+      if (!project) throw httpError(400, 'Projekt fehlt');
+      if (!text) throw httpError(400, 'Auftrag fehlt');
+      const chat = newChat(project, clean(body.title, 80) || text.split('\n')[0].slice(0, 60));
+      sendMessage(chat, body.kind === 'meeting' ? MEETING_PREFIX + text : text, text);
+      return chat;
+    }
+    const chat = findChat(key);
+    if (!chat) throw httpError(404, 'Chat nicht gefunden');
+    if (method === 'POST' && sub === 'message') {
+      const text = String(body.text || '').trim();
+      if (!text) throw httpError(400, 'Nachricht fehlt');
+      sendMessage(chat, text);
+      return chat;
+    }
+    if (method === 'POST' && sub === 'action') {
+      chatAction(chat, body);
+      return chat;
+    }
+    if (method === 'PATCH') {
+      if (typeof body.title === 'string' && body.title.trim()) chat.title = clean(body.title, 80);
+      chatChanged(chat);
+      return chat;
+    }
+  }
+
+  if (area === 'pages') {
+    if (method === 'GET' && !key) return listPages();
+    if (method === 'GET') return { name: key, content: readPage(key) };
+    if (method === 'PUT') {
+      writePage(key, body.content);
+      return { name: key };
+    }
+  }
+
+  if (area === 'machines') {
+    if (method === 'POST' && !key) {
+      const machine = addMachine(body);
+      setupMachine(machine);
+      return machine;
+    }
+    const machine = findMachine(key);
+    if (!machine) throw httpError(404, 'Maschine nicht gefunden');
+    if (method === 'POST' && sub === 'setup') {
+      setupMachine(machine);
+      return machine;
+    }
+    if (method === 'PATCH') {
+      if (typeof body.name === 'string' && body.name.trim()) machine.name = clean(body.name, 60);
+      if (Number(body.slots) >= 1) {
+        machine.slots = Math.min(200, Math.floor(Number(body.slots)));
+        machine.slotsManual = true;
+      }
+      if (body.accountId === 'auto' || findAccount(body.accountId)) machine.accountId = body.accountId;
+      changed('fleet');
+      pump();
+      return machine;
+    }
+    if (method === 'DELETE') {
+      const hetznerId = machine.hetznerId;
+      removeMachine(machine);
+      if (hetznerId && url.searchParams.get('server') === '1') await deleteServer(hetznerId);
+      return {};
+    }
+  }
+
+  if (area === 'accounts') {
+    if (method === 'POST' && !key) {
+      const name = clean(body.name, 60);
+      const token = String(body.token || '').trim();
+      if (!name) throw httpError(400, 'Name fehlt');
+      if (!/^[A-Za-z0-9_.-]{20,600}$/.test(token)) throw httpError(400, 'Das sieht nicht nach einem Token aus `claude setup-token` aus.');
+      const account = { id: id(), name };
+      state.accounts.push(account);
+      secrets.accounts[account.id] = token;
+      saveSecrets();
+      changed('fleet');
+      pushTokens();
+      pump();
+      return account;
+    }
+    const account = findAccount(key);
+    if (method === 'DELETE' && account && !account.builtin) {
+      state.accounts = state.accounts.filter((a) => a.id !== account.id);
+      delete secrets.accounts[account.id];
+      for (const machine of state.machines) if (machine.accountId === account.id) machine.accountId = 'auto';
+      saveSecrets();
+      changed('fleet');
+      pushTokens();
+      return {};
+    }
+  }
+
+  if (area === 'settings' && method === 'PUT' && key) {
+    updateSettings(key, body);
+    return {};
+  }
+
+  if (area === 'inbox' && method === 'GET') {
+    if (key === 'mail' && sub) return readMail(sub);
+    const result = { mail: [], sms: [], mailError: '', smsError: '', smsNote: '' };
+    await Promise.all([
+      listMail(url.searchParams.get('fresh') === '1').then((m) => (result.mail = m), (err) => (result.mailError = err.message)),
+      listSms().then((s) => { result.sms = s.messages; result.smsNote = s.note || ''; }, (err) => (result.smsError = err.message)),
+    ]);
+    return result;
+  }
+
+  if (area === 'subscriptions') {
+    if (method === 'POST') return upsertSubscription(body);
+    const sub = state.subscriptions.find((s) => s.id === key);
+    if (method === 'DELETE' && sub) {
+      removeSubscription(sub);
+      return {};
+    }
+  }
+
+  if (area === 'vault') {
+    // Sichtbar für alle Projekte oder genau eines.
+    const scope = body.scope === 'alle' || findProject(body.scope) ? body.scope : undefined;
+    if (method === 'POST' && !key) {
+      createLogin({ ...body, scope: scope || 'alle' }, 'mensch');
+      return {};
+    }
+    const entry = loginById(key);
+    if (!entry) throw httpError(404, 'Zugang nicht gefunden');
+    if (method === 'POST' && sub === 'reveal') {
+      return {
+        user: entry.user,
+        password: entry.password,
+        note: entry.note,
+        previous: entry.previous?.[0]?.password || '',
+        totp: entry.totp ? totpCode(entry.totp) : null,
+      };
+    }
+    // Einen Zugang als Postfach der Agenten übernehmen, ohne dass das Passwort die Oberfläche sieht.
+    if (method === 'POST' && sub === 'use-as-mail') {
+      if (!entry.user.includes('@')) throw httpError(400, 'Der Benutzername dieses Zugangs ist keine E-Mail-Adresse.');
+      const m = state.settings.mail;
+      state.settings.mail = {
+        ...m,
+        address: entry.user,
+        user: entry.user,
+        imapHost: m.imapHost || 'imap.mailbox.org',
+        smtpHost: m.smtpHost || 'smtp.mailbox.org',
+      };
+      secrets.mail.password = entry.password;
+      saveSecrets();
+      changed('settings');
+      return {};
+    }
+    if (method === 'PATCH') {
+      updateLogin(entry, {
+        name: body.name,
+        user: body.user,
+        url: body.url,
+        note: body.note,
+        scope,
+        totp: body.totp || undefined,
+        password: body.password || undefined,
+        generate: Boolean(body.generate),
+      });
+      return {};
+    }
+    if (method === 'DELETE') {
+      deleteLogin(entry);
+      return {};
+    }
+  }
+
+  if (area === 'hetzner') {
+    if (key === 'types' && method === 'GET') return listTypes();
+    if (key === 'servers' && method === 'POST') return createServer(body);
+  }
+
+  throw httpError(404, 'Nicht gefunden');
+}
+
+// ---------- Zugriff ----------
+// Drei Wege zur Oberfläche:
+// 1. Vom selben Rechner (127.0.0.1): offen, solange LEITSTAND_TRUST_LOCAL nicht 0 ist. Läuft der
+//    Leitstand auf einem Server, auf dem auch die Agenten arbeiten, wird das abgeschaltet: Sonst
+//    könnte sich ein Agent dort selbst etwas freigeben.
+// 2. Aus dem eigenen Tailscale-Netz (LEITSTAND_TRUST_TAILNET=1): offen für die anderen Geräte
+//    des Netzes, nicht für den Server selbst. Tailscale hat diese Geräte schon angemeldet.
+// 3. Über einen eingetragenen Hostnamen mit Zugangskennwort.
+
+const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost']);
+const TRUST_LOCAL = process.env.LEITSTAND_TRUST_LOCAL !== '0';
+const TRUST_TAILNET = process.env.LEITSTAND_TRUST_TAILNET === '1';
+const BIND = (process.env.LEITSTAND_BIND || HOST).split(',').map((a) => a.trim()).filter(Boolean);
+const OWN_ADDRESSES = new Set(Object.values(os.networkInterfaces()).flat().map((i) => i.address));
+const remoteOf = (req) => String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+const isLoopback = (address) => address === '127.0.0.1' || address === '::1';
+// Tailscale vergibt Adressen aus 100.64.0.0/10.
+const inTailnet = (address) => {
+  const [a, b] = address.split('.').map(Number);
+  return a === 100 && b >= 64 && b <= 127;
+};
+const sessions = new Set();
+const loginAttempts = [];
+const sha = (value) => crypto.createHash('sha256').update(String(value)).digest();
+
+function sessionOf(req) {
+  const match = String(req.headers.cookie || '').match(/(?:^|;\s*)ls=([a-f0-9]{48})/);
+  return match && sessions.has(match[1]) ? match[1] : null;
+}
+
+const LOGIN_PAGE = `<!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Leitstand</title><link rel="stylesheet" href="/style.css">
+<body><form class="empty form" method="post" action="/login" style="margin:auto;text-align:left;width:320px">
+<h2>Leitstand</h2><label>Zugangskennwort<input type="password" name="token" autofocus required></label>
+<div class="error">__ERROR__</div><button class="primary" type="submit">Anmelden</button></form></body></html>`;
+
+async function gate(req, res, url) {
+  const host = String(req.headers.host || '').replace(/:\d+$/, '').toLowerCase();
+  const remote = remoteOf(req);
+  if (TRUST_LOCAL && LOCAL_HOSTS.has(host) && isLoopback(remote)) return 'local';
+  const knownHost = state.settings.access.hosts.includes(host) || BIND.includes(host);
+  if (TRUST_TAILNET && knownHost && inTailnet(remote) && !OWN_ADDRESSES.has(remote)) return 'remote';
+  if (!secrets.access.token || !knownHost) {
+    res.writeHead(403).end('Forbidden');
+    return null;
+  }
+  if (url.pathname === '/style.css') return 'remote';
+  if (url.pathname === '/login') {
+    let error = '';
+    if (req.method === 'POST') {
+      const recent = loginAttempts.filter((t) => t > Date.now() - 600_000);
+      loginAttempts.length = 0;
+      loginAttempts.push(...recent, Date.now());
+      const token = new URLSearchParams(await readRaw(req, 10_000)).get('token') || '';
+      if (recent.length >= 8) {
+        error = 'Zu viele Versuche. Warte zehn Minuten.';
+      } else if (crypto.timingSafeEqual(sha(token), sha(secrets.access.token))) {
+        const session = crypto.randomBytes(24).toString('hex');
+        sessions.add(session);
+        res.writeHead(303, {
+          Location: '/',
+          // „Secure“ nur über HTTPS, sonst nimmt der Browser das Cookie nicht an.
+          'Set-Cookie': `ls=${session}; HttpOnly;${req.headers['x-forwarded-proto'] === 'https' ? ' Secure;' : ''} SameSite=Strict; Path=/; Max-Age=2592000`,
+        }).end();
+        return null;
+      } else {
+        error = 'Das Kennwort stimmt nicht.';
+      }
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(LOGIN_PAGE.replace('__ERROR__', error));
+    return null;
+  }
+  if (sessionOf(req)) return 'remote';
+  if (url.pathname.startsWith('/api/')) res.writeHead(401, { 'Content-Type': 'application/json' }).end('{"error":"Nicht angemeldet"}');
+  else res.writeHead(303, { Location: '/login' }).end();
+  return null;
+}
+
+// ---------- HTTP ----------
+
+const TYPES = {
+  '.html': 'text/html',
+  '.js': 'text/javascript',
+  '.css': 'text/css',
+  '.svg': 'image/svg+xml',
+  '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
+};
+
+// Ist der Leitstand auf einen Server umgezogen, leitet dieser Standort nur noch dorthin weiter.
+const MOVED_TO = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'umgezogen.json'), 'utf8')).url || '';
+  } catch {
+    return '';
+  }
+})();
+
+const handle = async (req, res) => {
+  if (MOVED_TO) {
+    res.writeHead(302, { Location: MOVED_TO }).end();
+    return;
+  }
+  const url = new URL(req.url, 'http://leitstand');
+  try {
+    const origin = await gate(req, res, url);
+    if (!origin) return;
+
+    if (url.pathname === '/api/events') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+      res.write('retry: 2000\n\n');
+      req.on('close', addClient(res));
+      return;
+    }
+
+    // Dateien aus den Projektordnern, etwa eine Website, die ein Agent gebaut hat. Seiten, die
+    // Skripte ausführen können, laufen abgeschottet: Sie dürfen den Leitstand nicht ansprechen.
+    if (url.pathname.startsWith('/files/')) {
+      const [projectId, ...rest] = url.pathname.slice('/files/'.length).split('/').map(decodeURIComponent);
+      const project = findProject(projectId);
+      if (!project) throw httpError(404, 'Projekt nicht gefunden');
+      let file = resolveInProject(project, rest.join('/'));
+      if (fs.statSync(file).isDirectory()) {
+        if (!url.pathname.endsWith('/')) {
+          res.writeHead(302, { Location: url.pathname + '/' }).end();
+          return;
+        }
+        file = path.join(file, 'index.html');
+        if (!fs.existsSync(file)) throw httpError(404, 'In diesem Ordner liegt keine index.html');
+      }
+      const type = FILE_TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream';
+      const active = ['text/html', 'image/svg+xml', 'text/xml'].includes(type);
+      res.writeHead(200, {
+        'Content-Type': /^text\/|json|svg|javascript/.test(type) ? `${type}; charset=utf-8` : type,
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+        ...(active ? { 'Content-Security-Policy': 'sandbox allow-scripts allow-forms allow-popups' } : {}),
+      });
+      fs.createReadStream(file).pipe(res);
+      return;
+    }
+
+    if (url.pathname.startsWith('/api/')) {
+      // Schreibzugriffe brauchen einen Header, den fremde Webseiten nicht setzen können.
+      if (req.method !== 'GET' && req.headers['x-leitstand'] !== '1') throw httpError(403, 'Forbidden');
+      const result = await api(req, url);
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result ?? {}));
+      return;
+    }
+
+    const file = path.join(PUBLIC_DIR, url.pathname === '/' ? 'index.html' : path.normalize(url.pathname));
+    if (!file.startsWith(PUBLIC_DIR + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+      res.writeHead(404).end('Not found');
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': `${TYPES[path.extname(file)] || 'application/octet-stream'}; charset=utf-8`,
+      'Cache-Control': 'no-store',
+    });
+    fs.createReadStream(file).pipe(res);
+  } catch (err) {
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
+    res.writeHead(err.status || 500, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: err.message }));
+  }
+};
+
+// Zweiter Port, nur für das Kommando `leitstand` aus Agentenläufen. Jede Anfrage braucht
+// das Token eines laufenden Agenten. Von hier aus lässt sich nichts steuern oder freigeben.
+const agentServer = http.createServer(async (req, res) => {
+  const url = new URL(req.url, 'http://leitstand');
+  try {
+    const host = String(req.headers.host || '').replace(/:\d+$/, '').toLowerCase();
+    if (!LOCAL_HOSTS.has(host) || !isLoopback(remoteOf(req)) || !url.pathname.startsWith('/agent/')) throw httpError(404, 'Unbekanntes Kommando');
+    const text = await agentApi(req, url);
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }).end(text);
+  } catch (err) {
+    if (!res.headersSent) res.writeHead(err.status || 500, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(`Fehler: ${err.message}`);
+  }
+});
+
+function shutdown() {
+  stopAll();
+  saveNow();
+  process.exit(0);
+}
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
+agentServer.listen(AGENT_PORT, HOST);
+for (const address of BIND) {
+  http.createServer(handle).listen(PORT, address, () => console.log(`Leitstand läuft: http://${address}:${PORT}`));
+}

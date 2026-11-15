@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Kommando der Agenten: Zugriff auf Kontext, eigene Identität und andere Lead-Agenten.
+# Läuft nur innerhalb eines Laufs, den der Leitstand gestartet hat.
+set -euo pipefail
+
+if [ -z "${LEITSTAND_URL:-}" ] || [ -z "${LEITSTAND_RUN:-}" ]; then
+  echo "leitstand: läuft nur innerhalb eines Agentenlaufs des Leitstands" >&2
+  exit 2
+fi
+
+call() {
+  local path="$1"
+  shift
+  curl -sS --max-time 90 -H "Authorization: Bearer $LEITSTAND_RUN" "$@" "$LEITSTAND_URL/agent/$path"
+  echo
+}
+
+usage() {
+  cat >&2 <<'EOF'
+leitstand wer
+leitstand kontext liste | lesen NAME | schreiben NAME   (Inhalt über stdin)
+leitstand mail liste | lesen ID | codes | senden AN BETREFF   (Text über stdin)
+leitstand sms liste
+leitstand pay anfragen BETRAG WÄHRUNG HÄNDLER GRUND | abrufen ID
+leitstand abo liste | beendet NAME
+leitstand abo setzen NAME [kosten=4] [waehrung=EUR] [intervall=monat|jahr|woche|einmalig]
+                          [bis=JJJJ-MM-TT] [verlaengert=ja|nein] [kuendigen=TEXT] [zweck=TEXT] [zugang=TRESORNAME]
+leitstand tresor liste | zeigen NAME | code NAME
+leitstand tresor neu NAME [BENUTZER] [ADRESSE]        (erzeugt ein Passwort)
+leitstand tresor setzen NAME [BENUTZER] [ADRESSE]     (Passwort über stdin)
+leitstand tresor 2fa NAME | notiz NAME                (Wert über stdin)
+leitstand tell PROJEKTNAME NACHRICHT
+leitstand auftrag TITEL                               (Auftragstext über stdin)
+leitstand auftraege
+leitstand hilfe TEXT | hilfe erledigt
+leitstand stand TEXT                                  (Zwischenstand bei langen Schritten)
+leitstand ergebnis TITEL ZIEL [BESCHREIBUNG]           (ZIEL: Pfad im Projektordner oder Webadresse)
+EOF
+  exit 2
+}
+
+case "${1:-}:${2:-}" in
+  wer:*) call wer ;;
+  kontext:liste | kontext:) call kontext ;;
+  kontext:lesen) call kontext/lesen -G --data-urlencode "name=${3:?NAME fehlt}" ;;
+  kontext:schreiben) call kontext/schreiben --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "text@-" ;;
+  mail:liste | mail:) call mail ;;
+  mail:lesen) call mail/lesen -G --data-urlencode "id=${3:?ID fehlt}" ;;
+  mail:codes) call mail/codes ;;
+  mail:senden) call mail/senden --data-urlencode "an=${3:?AN fehlt}" --data-urlencode "betreff=${4:?BETREFF fehlt}" --data-urlencode "text@-" ;;
+  sms:liste | sms:) call sms ;;
+  pay:anfragen) call pay/anfragen --data-urlencode "betrag=${3:?BETRAG fehlt}" --data-urlencode "waehrung=${4:?WÄHRUNG fehlt}" --data-urlencode "haendler=${5:?HÄNDLER fehlt}" --data-urlencode "grund=${6:?GRUND fehlt}" ;;
+  pay:abrufen) call pay/abrufen -G --data-urlencode "id=${3:?ID fehlt}" ;;
+  abo:liste | abo:) call abo ;;
+  abo:beendet) call abo/beendet --data-urlencode "name=${3:?NAME fehlt}" ;;
+  abo:setzen)
+    name="${3:?NAME fehlt}"
+    shift 3
+    fields=(--data-urlencode "name=$name")
+    for pair in "$@"; do fields+=(--data-urlencode "$pair"); done
+    call abo/setzen "${fields[@]}"
+    ;;
+  tresor:liste | tresor:) call tresor ;;
+  tresor:zeigen) call tresor/zeigen -G --data-urlencode "name=${3:?NAME fehlt}" ;;
+  tresor:lesen) call tresor/lesen -G --data-urlencode "name=${3:?NAME fehlt}" ;;
+  tresor:code) call tresor/code -G --data-urlencode "name=${3:?NAME fehlt}" ;;
+  tresor:neu) call tresor/neu --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "benutzer=${4:-}" --data-urlencode "url=${5:-}" ;;
+  tresor:setzen) call tresor/setzen --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "benutzer=${4:-}" --data-urlencode "url=${5:-}" --data-urlencode "wert@-" ;;
+  tresor:2fa) call tresor/2fa --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "wert@-" ;;
+  tresor:notiz) call tresor/notiz --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "wert@-" ;;
+  auftrag:*) call auftrag --data-urlencode "titel=${2:?TITEL fehlt}" --data-urlencode "text@-" ;;
+  auftraege:*) call auftraege ;;
+  ergebnis:*) call ergebnis --data-urlencode "titel=${2:?TITEL fehlt}" --data-urlencode "ziel=${3:?ZIEL fehlt}" --data-urlencode "text=${4:-}" ;;
+  stand:*) call stand --data-urlencode "text=${2:?TEXT fehlt}" ;;
+  hilfe:*) call hilfe --data-urlencode "text=${2:?TEXT fehlt}" ;;
+  tell:*) call tell --data-urlencode "projekt=${2:?PROJEKTNAME fehlt}" --data-urlencode "nachricht=${3:?NACHRICHT fehlt}" ;;
+  *) usage ;;
+esac

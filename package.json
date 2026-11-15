@@ -1,0 +1,13 @@
+{
+  "name": "leitstand",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lokaler Leitstand für Claude-Code-Agenten: Lead-Agent pro Projekt, Warteschlange für Entscheidungen, gemeinsamer Kontext",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,6 @@
+data/
+data.*/
+node_modules/
+__pycache__/
+*.vor-*
+.DS_Store
