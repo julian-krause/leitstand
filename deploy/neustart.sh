@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="${LEITSTAND_SERVER:-leitstand@SERVER-IP}"
 URL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "$ROOT/data/umgezogen.json" 2>/dev/null || echo http://TAILSCALE-IP:4747)"
 
-KEY="$(ls "$ROOT"/data.vor-umzug-*/keys/leitstand_ed25519 "$ROOT"/data/keys/leitstand_ed25519 2>/dev/null | head -1)"
+KEY="$( (ls "$ROOT"/data.vor-umzug-*/keys/leitstand_ed25519 "$ROOT"/data/keys/leitstand_ed25519 2>/dev/null || true) | head -1)"
 [ -n "$KEY" ] || { echo "SSH-Schlüssel des Leitstands nicht gefunden."; exit 1; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
