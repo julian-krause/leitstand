@@ -631,10 +631,10 @@ function renderZentraleEntry() {
   const el = $('#zentrale-entry');
   if (!el) return;
   const chat = zentraleChat();
-  const state = !chat ? '' : chat.status === 'running' || chat.status === 'queued' ? 'verteilt gerade …' : chat.status === 'attention' ? 'fragt dich etwas' : 'bereit';
+  const state = !chat ? '' : chat.status === 'running' || chat.status === 'queued' ? 'denkt …' : chat.status === 'attention' ? 'fragt dich etwas' : 'bereit';
   el.className = `zentrale-entry ${chat && chat.id === S.chatId ? 'active' : ''}`;
   el.innerHTML = `<span class="z-icon" aria-hidden="true">◎</span>
-    <span class="z-text"><b>Zentrale</b><span>Schreib hier alles, sie verteilt es an deine Projekte</span></span>
+    <span class="z-text"><b>Zentrale</b><span>Überblick, Fragen, Abstimmung über alle Projekte</span></span>
     ${chat ? `<span class="z-state"><span class="dot ${dotClass(chat)}"></span>${esc(state)}</span>` : ''}`;
 }
 
@@ -794,7 +794,7 @@ function updateChat(forceScroll = false) {
     <button class="ghost back" data-a="back" aria-label="Zurück zur Liste">←</button>
     <div class="grow">
       <h1>${esc(chat.title)}</h1>
-      <div class="sub">${isZentrale(chat) ? 'Verteilt deine Nachrichten an die Projekte · arbeitet selbst nichts aus · ohne Vorgeschichte' : sub}</div>
+      <div class="sub">${isZentrale(chat) ? 'Das zentrale Gehirn: kennt alle Projekte, findet selbst heraus, stimmt sich mit den Agenten ab' : sub}</div>
     </div>
     ${chat.crew ? `<span class="badge">Crew ${chat.crew}</span>` : ''}
     ${isZentrale(chat) ? '<span class="badge">Fable 5.2</span>' : `<span class="model-pick" title="Modell und Aufwand dieses Chats, gilt ab dem nächsten Zug">
@@ -850,7 +850,7 @@ function updateChat(forceScroll = false) {
   const running = chat.status === 'running';
   $('#composer-interrupt').hidden = !running;
   $('#composer-input').placeholder = isZentrale(chat)
-    ? 'Schreib einfach, was zu tun ist. Die Zentrale gibt es an das passende Projekt weiter (Enter).'
+    ? 'Frag, was du wissen willst, oder sag, was abgestimmt werden soll (Enter)'
     : running
     ? 'Kommt sofort beim Agenten an (Enter) · Esc unterbricht'
     : 'Nachricht an deinen Lead-Agenten (Enter sendet, Umschalt+Enter für neue Zeile)';

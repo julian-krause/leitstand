@@ -56,6 +56,8 @@ leitstand laptop TITEL                                (Auftrag an den Mac des Me
 leitstand projekte                                    (Projekte mit ihren letzten Chats)
 leitstand weitergeben PROJEKT TITEL | nachreichen CHATID | verteilt   (nur Zentrale, Text über stdin)
 leitstand lesen CHATID [ANZAHL] | suchen BEGRIFF      (nur Zentrale: Gesamtkontext bei Bedarf)
+leitstand fragen CHATID                               (nur Zentrale: Frage an einen Agenten, Text über stdin)
+leitstand zentrale TEXT                               (Nachricht an die Zentrale, auch als Antwort auf ihre Frage)
 leitstand hilfe TEXT | hilfe erledigt                 (Klick im Livebild deines Browsers)
 leitstand uebergabe URL TEXT                          (Mensch erledigt es im eigenen Browser)
 leitstand stand TEXT                                  (Zwischenstand bei langen Schritten)
@@ -110,6 +112,8 @@ case "${1:-}:${2:-}" in
   weitergeben:*) call weitergeben --data-urlencode "projekt=${2:?PROJEKT fehlt}" --data-urlencode "titel=${3:?TITEL fehlt}" --data-urlencode "text@-" ;;
   nachreichen:*) call nachreichen --data-urlencode "chat=${2:?CHATID fehlt}" --data-urlencode "text@-" ;;
   verteilt:*) call verteilt ;;
+  fragen:*) call fragen --data-urlencode "chat=${2:?CHATID fehlt}" --data-urlencode "text@-" ;;
+  zentrale:*) shift; call zentrale --data-urlencode "text=${*:?TEXT fehlt}" ;;
   lesen:*) call lesen --data-urlencode "chat=${2:?CHATID fehlt}" --data-urlencode "anzahl=${3:-}" ;;
   suchen:*) shift; call suchen --data-urlencode "begriff=${*:?BEGRIFF fehlt}" ;;
   laptop:*) call laptop --data-urlencode "titel=${2:?TITEL fehlt}" --data-urlencode "text@-" ;;
