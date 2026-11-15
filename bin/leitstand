@@ -33,7 +33,9 @@ leitstand tresor loeschen NAME                        (fremde Einträge erst nac
 leitstand tell PROJEKTNAME NACHRICHT
 leitstand laeufe | laeufe weiter IDS|alle | laeufe erledigt IDS|alle   (vom Menschen gestoppte Läufe, nur auf seine Anweisung)
 leitstand auftrag TITEL                               (Auftragstext über stdin)
-leitstand auftraege
+leitstand auftraege | auftraege stopp IDS|alle | auftraege weiter IDS|alle
+leitstand auftraege pause IDS|alle [bis=reset|HH:MM|MINUTEN]   (eigene Teilaufträge anhalten)
+leitstand budget                                      (Abo-Kontingent: Auslastung, Rücksetzzeit, Empfehlung)
 leitstand laptop TITEL                                (Auftrag an den Mac des Menschen, Text über stdin)
 leitstand hilfe TEXT | hilfe erledigt                 (Klick im Livebild deines Browsers)
 leitstand uebergabe URL TEXT                          (Mensch erledigt es im eigenen Browser)
@@ -73,6 +75,11 @@ case "${1:-}:${2:-}" in
   tresor:2fa) call tresor/2fa --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "wert@-" ;;
   tresor:loeschen) call tresor/loeschen --data-urlencode "name=${3:?NAME fehlt}" ;;
   tresor:notiz) call tresor/notiz --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "wert@-" ;;
+  auftrag:stopp | auftrag:pause | auftrag:weiter)
+    if [ -n "${3:-}" ]; then a="$2"; shift 2; call "auftraege/$a" --data-urlencode "ids=$*"
+    else call auftrag --data-urlencode "titel=$2" --data-urlencode "text@-"; fi ;;
+  auftraege:stopp | auftraege:pause | auftraege:weiter) a="$2"; shift 2; call "auftraege/$a" --data-urlencode "ids=${*:?IDS oder alle fehlt}" ;;
+  budget:*) call budget ;;
   auftrag:*) call auftrag --data-urlencode "titel=${2:?TITEL fehlt}" --data-urlencode "text@-" ;;
   auftraege:*) call auftraege ;;
   laptop:*) call laptop --data-urlencode "titel=${2:?TITEL fehlt}" --data-urlencode "text@-" ;;
