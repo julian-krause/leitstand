@@ -660,6 +660,7 @@ function renderChatList() {
 // ---------- Chat ----------
 
 function buildChat() {
+  closeLive();
   const el = $('#chat');
   const chat = S.chats.get(S.chatId);
   if (!chat) {
@@ -729,12 +730,17 @@ function updateChat(forceScroll = false) {
     </div>
     ${chat.crew ? `<span class="badge">Crew ${chat.crew}</span>` : ''}
     <span class="badge"><span class="dot ${dotClass(chat)}"></span>${esc(statusText)}</span>
+    ${chat.status === 'running' && project?.browser && !chat.assist ? `<button data-a="live" title="Den Browser des Agenten live ansehen">${S.liveOpen === chat.id ? 'Browser schließen' : 'Browser'}</button>` : ''}
     ${chat.status === 'running' || chat.status === 'queued' ? '<button data-a="stop">Stoppen</button>' : ''}
     <button class="ghost" data-a="archive" title="Aus der Liste entfernen">Archivieren</button>`;
   $('#chat-head').onclick = (event) => {
     const a = event.target.closest('button')?.dataset.a;
     if (a === 'back') selectChat(null);
     if (a === 'stop') act(chat.id, 'stop');
+    if (a === 'live') {
+      S.liveOpen = S.liveOpen === chat.id ? null : chat.id;
+      updateChat();
+    }
     if (a === 'archive' && confirm('Diesen Chat archivieren? Ein laufender Agent wird gestoppt.')) {
       act(chat.id, 'archive');
       selectChat(null);
@@ -760,13 +766,187 @@ function updateChat(forceScroll = false) {
   renderAsk(chat);
 }
 
+// ---------- Browser live im Chat ----------
+// Der Browser des Agenten läuft auf seiner Maschine. Der Leitstand reicht dessen Bild als
+// WebSocket durch; Klicks, Scrollen und Tasten gehen auf demselben Weg zurück.
+
+let LIVE = null;
+
+function liveHtml() {
+  return `<div class="live">
+    <div class="live-bar"><span class="live-url"></span><span class="live-state">Verbinde …</span><button type="button" class="ghost" data-live="big" title="Größer oder kleiner">⤢</button></div>
+    <div class="live-screen"><canvas tabindex="0" aria-label="Browser des Agenten"></canvas></div>
+    <form class="live-type"><input type="text" placeholder="Text eintippen und mit Enter senden (auch zum Einfügen)" autocomplete="off"><button type="submit">Tippen</button></form>
+  </div>`;
+}
+
+function closeLive() {
+  if (!LIVE) return;
+  LIVE.closed = true;
+  try {
+    LIVE.ws?.close();
+  } catch {}
+  LIVE = null;
+}
+
+function openLive(chatId, wrap) {
+  closeLive();
+  const canvas = wrap.querySelector('canvas');
+  const ctx = canvas.getContext('2d');
+  const stateEl = wrap.querySelector('.live-state');
+  const urlEl = wrap.querySelector('.live-url');
+  const live = { chatId, ws: null, closed: false, w: 1280, h: 720, tries: 0, drawing: false };
+  LIVE = live;
+
+  const send = (message) => {
+    if (live.ws?.readyState === 1) live.ws.send(JSON.stringify(message));
+  };
+
+  const connect = () => {
+    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/chats/${chatId}/browser`);
+    live.ws = ws;
+    ws.onopen = () => {
+      live.tries = 0;
+      stateEl.textContent = 'live';
+      stateEl.classList.add('on');
+    };
+    ws.onmessage = (message) => {
+      let data;
+      try {
+        data = JSON.parse(message.data);
+      } catch {
+        return;
+      }
+      if (data.type === 'frame') {
+        const img = new Image();
+        img.onload = () => {
+          // Die gemeldete Höhe stimmt nicht immer mit dem Fenster überein. Verlässlich ist das
+          // Bild selbst: Es zeigt genau das Fenster, höchstens gleichmäßig verkleinert.
+          const scale = (data.metadata?.deviceWidth || img.naturalWidth) / img.naturalWidth;
+          live.w = img.naturalWidth * scale;
+          live.h = img.naturalHeight * scale;
+          if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+          }
+          ctx.drawImage(img, 0, 0);
+          send({ type: 'ack', seq: data.seq });
+        };
+        img.onerror = () => send({ type: 'ack', seq: data.seq });
+        img.src = `data:image/jpeg;base64,${data.data}`;
+      } else if (data.type === 'url') {
+        urlEl.textContent = data.url || '';
+      } else if (data.type === 'tabs') {
+        const active = (data.tabs || []).find((t) => t.active);
+        if (active?.url) urlEl.textContent = active.url;
+      }
+    };
+    ws.onclose = () => {
+      if (live.closed) return;
+      stateEl.classList.remove('on');
+      if (++live.tries > 20) {
+        stateEl.textContent = 'Der Browser ist nicht erreichbar. Ist er noch offen?';
+        return;
+      }
+      stateEl.textContent = 'Verbindung weg, verbinde neu …';
+      setTimeout(() => !live.closed && connect(), Math.min(5000, 800 * live.tries));
+    };
+  };
+  connect();
+
+  // Bildschirmposition -> Koordinaten im Browser des Agenten
+  const at = (event) => {
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: Math.round(((event.clientX - r.left) / r.width) * live.w),
+      y: Math.round(((event.clientY - r.top) / r.height) * live.h),
+    };
+  };
+  const mods = (e) => (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
+  const button = (e) => (e.button === 2 ? 'right' : e.button === 1 ? 'middle' : 'left');
+  let lastMove = 0;
+  let clicks = { at: 0, count: 0 };
+
+  canvas.oncontextmenu = (e) => e.preventDefault();
+  canvas.onpointerdown = (e) => {
+    e.preventDefault();
+    canvas.focus({ preventScroll: true });
+    canvas.setPointerCapture?.(e.pointerId);
+    const now = performance.now();
+    clicks = { at: now, count: now - clicks.at < 400 ? clicks.count + 1 : 1 };
+    send({ type: 'input_mouse', eventType: 'mouseMoved', ...at(e), button: 'none', modifiers: mods(e) });
+    send({ type: 'input_mouse', eventType: 'mousePressed', ...at(e), button: button(e), clickCount: clicks.count, modifiers: mods(e) });
+  };
+  canvas.onpointerup = (e) => {
+    e.preventDefault();
+    send({ type: 'input_mouse', eventType: 'mouseReleased', ...at(e), button: button(e), clickCount: clicks.count, modifiers: mods(e) });
+  };
+  canvas.onpointermove = (e) => {
+    const now = performance.now();
+    if (now - lastMove < 40) return;
+    lastMove = now;
+    send({ type: 'input_mouse', eventType: 'mouseMoved', ...at(e), button: e.buttons ? 'left' : 'none', modifiers: mods(e) });
+  };
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    send({ type: 'input_mouse', eventType: 'mouseWheel', ...at(e), deltaX: Math.round(e.deltaX), deltaY: Math.round(e.deltaY), modifiers: mods(e) });
+  }, { passive: false });
+
+  const keyEvent = (e, eventType) => {
+    const text = eventType === 'keyDown' && !e.ctrlKey && !e.metaKey ? (e.key.length === 1 ? e.key : e.key === 'Enter' ? '\r' : '') : '';
+    return { type: 'input_keyboard', eventType, key: e.key, code: e.code, text, modifiers: mods(e), windowsVirtualKeyCode: e.keyCode };
+  };
+  canvas.onkeydown = (e) => {
+    if (e.isComposing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    send(keyEvent(e, 'keyDown'));
+  };
+  canvas.onkeyup = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    send(keyEvent(e, 'keyUp'));
+  };
+
+  // Text am Stück, etwa vom Handy oder aus der Zwischenablage
+  const form = wrap.querySelector('.live-type');
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    const input = form.querySelector('input');
+    for (const ch of input.value) {
+      send({ type: 'input_keyboard', eventType: 'keyDown', key: ch, text: ch });
+      send({ type: 'input_keyboard', eventType: 'keyUp', key: ch });
+    }
+    input.value = '';
+  };
+  wrap.querySelector('[data-live="big"]').onclick = () => wrap.classList.toggle('big');
+}
+
 function renderAsk(chat) {
   const el = $('#ask');
   const a = chat.attention;
+  const project = projectOf(chat);
+  const watching = S.liveOpen === chat.id && chat.status === 'running';
+  if ((chat.assist || watching) && project?.browser) {
+    // Das Livebild bleibt bei jeder Aktualisierung stehen, nur der Text darüber ändert sich.
+    if (!(LIVE && LIVE.chatId === chat.id && el.querySelector('.live'))) {
+      el.onclick = null;
+      el.innerHTML = `<div class="ask live-ask"><div class="kind"></div><div class="q"></div><div class="next"></div>${liveHtml()}</div>`;
+      openLive(chat.id, el.querySelector('.live'));
+    }
+    el.querySelector('.kind').textContent = chat.assist ? 'Kurz gebraucht' : 'Browser des Agenten';
+    el.querySelector('.q').textContent = chat.assist ? chat.assist.text : 'Live-Ansicht. Du kannst mitklicken, der Agent arbeitet im selben Fenster.';
+    el.querySelector('.next').textContent = chat.assist
+      ? 'Klick direkt ins Bild. Der Agent merkt von selbst, wenn du fertig bist, und macht weiter.'
+      : '';
+    return;
+  }
+  closeLive();
+  if (S.liveOpen === chat.id && chat.status !== 'running') S.liveOpen = null;
   if (chat.assist) {
     el.onclick = null;
     el.innerHTML = `<div class="ask"><div class="kind">Kurz gebraucht</div><div class="q">${esc(chat.assist.text)}</div>
-      <div class="next">Der Agent wartet darauf und macht danach von selbst weiter. Hier ist nichts anzuklicken.</div></div>`;
+      <div class="next">Der Agent wartet darauf und macht danach von selbst weiter.</div></div>`;
     return;
   }
   // Eine Zahlung wartet, während der Agent noch arbeitet
@@ -1081,7 +1261,6 @@ function renderProjects() {
       <div class="checks">
         <span class="note" style="margin:0">Der Agent darf nutzen:</span>
         <label><input type="checkbox" data-browser ${p.browser ? 'checked' : ''}>Browser</label>
-        ${machine?.kind === 'local' && p.browser ? `<label title="Das Browserfenster des Agenten ist zu sehen. Nötig, wenn du selbst etwas anklicken musst, etwa eine Menschen-Prüfung."><input type="checkbox" data-visible ${p.browserVisible ? 'checked' : ''}>Browser sichtbar</label>` : ''}
         ${machine?.kind === 'local' ? `<label title="Deine persönliche ~/.claude/CLAUDE.md, etwa die Regeln zu deinem Second Brain"><input type="checkbox" data-personal ${p.personal ? 'checked' : ''}>Meine CLAUDE.md</label>` : ''}
         <label><input type="checkbox" data-identity="mail" ${i.mail ? 'checked' : ''}>Postfach</label>
         <label><input type="checkbox" data-identity="sms" ${i.sms ? 'checked' : ''}>SMS</label>
@@ -1109,8 +1288,6 @@ $('#projects').addEventListener('change', (event) => {
       return;
     }
     run(api('PATCH', `/api/projects/${project.id}`, { [field]: event.target.value }));
-  } else if ('visible' in event.target.dataset) {
-    run(api('PATCH', `/api/projects/${project.id}`, { browserVisible: event.target.checked }));
   } else if ('personal' in event.target.dataset) {
     run(api('PATCH', `/api/projects/${project.id}`, { personal: event.target.checked }));
   } else if ('browser' in event.target.dataset) {

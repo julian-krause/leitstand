@@ -1,6 +1,7 @@
 // Leitstand: führt viele Claude-Code-Agenten über eine Oberfläche statt über Terminals.
 // Keine Abhängigkeiten. Start: node server.js
 import http from 'node:http';
+import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -10,7 +11,7 @@ import {
   addClient, id, findChat, findProject, findMachine, findAccount, httpError, readRaw,
 } from './lib/store.js';
 import {
-  sendMessage, stopRun, stopAll, newChat, publicKey, addMachine, removeMachine, setupMachine, pushTokens, pump,
+  sendMessage, stopRun, stopAll, newChat, publicKey, addMachine, removeMachine, setupMachine, pushTokens, pump, browserStream,
 } from './lib/runs.js';
 import { MEETING_PREFIX } from './lib/agent.js';
 import { listPages, readPage, writePage } from './lib/pages.js';
@@ -613,6 +614,64 @@ const agentServer = http.createServer(async (req, res) => {
   }
 });
 
+// ---------- Browser live im Chat ----------
+// Die Oberfläche öffnet einen WebSocket auf /api/chats/ID/browser. Der Leitstand prüft den
+// Zugriff wie bei jeder anderen Anfrage und verbindet ihn dann ungefiltert mit dem Stream des
+// Chat-Browsers. Bild, Klicks und Tasten laufen durch, ohne dass der Leitstand sie auswertet.
+
+// Wer darf? Dieselben drei Wege wie in gate(), aber ohne eine Antwort zu schreiben.
+function accessOf(req) {
+  const host = String(req.headers.host || '').replace(/:\d+$/, '').toLowerCase();
+  const remote = remoteOf(req);
+  if (TRUST_LOCAL && LOCAL_HOSTS.has(host) && isLoopback(remote)) return true;
+  const knownHost = state.settings.access.hosts.includes(host) || BIND.includes(host);
+  if (TRUST_TAILNET && knownHost && inTailnet(remote) && !OWN_ADDRESSES.has(remote)) return true;
+  return Boolean(secrets.access.token && knownHost && sessionOf(req));
+}
+
+function refuse(socket, code, text) {
+  socket.end(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+}
+
+async function handleUpgrade(req, socket, head) {
+  socket.on('error', () => {});
+  const match = new URL(req.url, 'http://leitstand').pathname.match(/^\/api\/chats\/([A-Za-z0-9_-]+)\/browser$/);
+  if (!match || String(req.headers.upgrade || '').toLowerCase() !== 'websocket') return refuse(socket, 404, 'Not Found');
+  // Fremde Webseiten dürfen keinen WebSocket zum Leitstand öffnen: Der Ursprung muss dieselbe Adresse sein.
+  let origin = '';
+  try {
+    origin = new URL(String(req.headers.origin || '')).host;
+  } catch {}
+  if (!accessOf(req) || origin !== String(req.headers.host || '')) return refuse(socket, 403, 'Forbidden');
+  const chat = findChat(match[1]);
+  if (!chat) return refuse(socket, 404, 'Not Found');
+  let port;
+  try {
+    port = await browserStream(chat);
+  } catch (err) {
+    return refuse(socket, err.status || 502, 'Browser nicht erreichbar');
+  }
+  const upstream = net.connect(port, '127.0.0.1', () => {
+    // Der Stream nimmt nur Verbindungen ohne fremden Ursprung an: Origin bleibt weg.
+    const headers = [
+      'GET /?pacing=ack&maxFps=15 HTTP/1.1',
+      `Host: 127.0.0.1:${port}`,
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      `Sec-WebSocket-Key: ${req.headers['sec-websocket-key']}`,
+      `Sec-WebSocket-Version: ${req.headers['sec-websocket-version'] || 13}`,
+      ...(req.headers['sec-websocket-extensions'] ? [`Sec-WebSocket-Extensions: ${req.headers['sec-websocket-extensions']}`] : []),
+    ];
+    upstream.write(`${headers.join('\r\n')}\r\n\r\n`);
+    if (head?.length) upstream.write(head);
+    upstream.pipe(socket);
+    socket.pipe(upstream);
+  });
+  upstream.on('error', () => socket.destroy());
+  socket.on('close', () => upstream.destroy());
+  upstream.on('close', () => socket.destroy());
+}
+
 function shutdown() {
   stopAll();
   saveNow();
@@ -623,5 +682,9 @@ process.on('SIGTERM', shutdown);
 
 agentServer.listen(AGENT_PORT, HOST);
 for (const address of BIND) {
-  http.createServer(handle).listen(PORT, address, () => console.log(`Leitstand läuft: http://${address}:${PORT}`));
+  const ui = http.createServer(handle);
+  ui.on('upgrade', (req, socket, head) => {
+    handleUpgrade(req, socket, head).catch(() => socket.destroy());
+  });
+  ui.listen(PORT, address, () => console.log(`Leitstand läuft: http://${address}:${PORT}`));
 }
