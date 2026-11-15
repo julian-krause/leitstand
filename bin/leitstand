@@ -28,7 +28,8 @@ leitstand abo setzen NAME [kosten=4] [waehrung=EUR] [intervall=monat|jahr|woche|
 leitstand tresor liste | zeigen NAME | code NAME
 leitstand tresor neu NAME [BENUTZER] [ADRESSE]        (erzeugt ein Passwort)
 leitstand tresor setzen NAME [BENUTZER] [ADRESSE]     (Passwort über stdin)
-leitstand tresor 2fa NAME | notiz NAME                (Wert über stdin)
+leitstand tresor 2fa NAME | notiz NAME                (Wert über stdin; 2fa mit leerer Eingabe entfernt den Schlüssel)
+leitstand tresor loeschen NAME                        (fremde Einträge erst nach Freigabe durch den Menschen)
 leitstand tell PROJEKTNAME NACHRICHT
 leitstand laeufe | laeufe weiter IDS|alle | laeufe erledigt IDS|alle   (vom Menschen gestoppte Läufe, nur auf seine Anweisung)
 leitstand auftrag TITEL                               (Auftragstext über stdin)
@@ -70,6 +71,7 @@ case "${1:-}:${2:-}" in
   tresor:neu) call tresor/neu --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "benutzer=${4:-}" --data-urlencode "url=${5:-}" ;;
   tresor:setzen) call tresor/setzen --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "benutzer=${4:-}" --data-urlencode "url=${5:-}" --data-urlencode "wert@-" ;;
   tresor:2fa) call tresor/2fa --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "wert@-" ;;
+  tresor:loeschen) call tresor/loeschen --data-urlencode "name=${3:?NAME fehlt}" ;;
   tresor:notiz) call tresor/notiz --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "wert@-" ;;
   auftrag:*) call auftrag --data-urlencode "titel=${2:?TITEL fehlt}" --data-urlencode "text@-" ;;
   auftraege:*) call auftraege ;;

@@ -170,6 +170,7 @@ const KIND_LABEL = {
   entscheidung: 'Entscheidung',
   erlaubnis: 'Erlaubnis',
   zahlung: 'Zahlung',
+  tresor: 'Tresor',
   fertig: 'Fertig',
   blockiert: 'Blockiert',
   antwort: 'Antwort',
@@ -1014,6 +1015,8 @@ function renderAsk(chat) {
     buttons.push('<button class="primary" data-a="allow">Erlauben</button>', '<button data-a="deny">Ablehnen</button>');
   } else if (a.kind === 'zahlung') {
     buttons.push('<button class="primary" data-a="pay-approve">Zahlung freigeben</button>', '<button data-a="pay-deny">Ablehnen</button>');
+  } else if (a.kind === 'tresor') {
+    buttons.push('<button class="primary" data-a="vault-approve">Freigeben</button>', '<button data-a="vault-deny">Ablehnen</button>');
   } else if (a.kind === 'fertig') {
     buttons.push('<button class="primary" data-a="done">Erledigt</button>', '<button data-a="reply">Nacharbeiten</button>');
   } else if (a.kind === 'fehler') {
@@ -1777,7 +1780,9 @@ function loginDialog(entry, secret = {}) {
     <label>Passwort<input name="password" type="password" autocomplete="new-password" placeholder="${entry ? 'leer lassen für unverändert' : 'leer lassen: der Leitstand erzeugt eines'}"></label>
     ${entry ? '<label class="check"><input type="checkbox" name="generate"> Neues Passwort erzeugen (das alte bleibt als Rückfall gespeichert)</label>' : ''}
     <label>2FA-Schlüssel (Einrichtungsschlüssel der Authenticator-App oder otpauth://-Adresse)<input name="totp" autocomplete="off" placeholder="${entry?.hasTotp ? 'gesetzt, leer lassen für unverändert' : 'optional'}"></label>
-    <label>Notiz (etwa Wiederherstellungscodes)<textarea name="note" rows="3">${esc(secret.note || '')}</textarea></label>
+    ${entry?.hasTotp ? '<label class="check"><input type="checkbox" name="removeTotp"> 2FA-Schlüssel entfernen</label>' : ''}
+    ${secret.previous ? '<label class="check"><input type="checkbox" name="clearPrevious"> Vorheriges Passwort verwerfen</label>' : ''}
+    <label>Notiz (etwa Wiederherstellungscodes, leeren zum Entfernen)<textarea name="note" rows="3">${esc(secret.note || '')}</textarea></label>
     <label>Nutzbar für<select name="scope">${scopes.map(([value, label]) => `<option value="${value}" ${(entry?.scope || 'alle') === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select></label>`,
     (data) => (entry ? api('PATCH', `/api/vault/${entry.id}`, data) : api('POST', '/api/vault', data)),
     entry ? 'Speichern' : 'Anlegen',

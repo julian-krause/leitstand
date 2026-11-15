@@ -15,7 +15,7 @@ import {
 } from './lib/runs.js';
 import { MEETING_PREFIX } from './lib/agent.js';
 import { listPages, readPage, writePage } from './lib/pages.js';
-import { agentApi, listMail, readMail, listSms, decidePayment } from './lib/identity.js';
+import { agentApi, listMail, readMail, listSms, decidePayment, decideVaultRequest } from './lib/identity.js';
 import { listTypes, createServer, deleteServer } from './lib/hetzner.js';
 import { loginById, createLogin, updateLogin, deleteLogin, totpCode } from './lib/vault.js';
 import { overview, listDir, resolveInProject, FILE_TYPES } from './lib/files.js';
@@ -84,6 +84,10 @@ function chatAction(chat, body) {
       );
       return;
     }
+    case 'vault-approve':
+    case 'vault-deny':
+      decideVaultRequest(chat, body.action === 'vault-approve');
+      return;
     case 'handoff-done':
       if (attention.kind !== 'uebergabe') throw httpError(400, 'Hier wartet keine Übergabe.');
       sendMessage(
@@ -427,10 +431,14 @@ async function api(req, url) {
         url: body.url,
         note: body.note,
         scope,
-        totp: body.totp || undefined,
+        totp: body.removeTotp ? '' : body.totp || undefined,
         password: body.password || undefined,
         generate: Boolean(body.generate),
       });
+      if (body.clearPrevious) {
+        entry.previous = [];
+        updateLogin(entry, {});
+      }
       return {};
     }
     if (method === 'DELETE') {
