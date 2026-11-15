@@ -30,8 +30,10 @@ leitstand tresor neu NAME [BENUTZER] [ADRESSE]        (erzeugt ein Passwort)
 leitstand tresor setzen NAME [BENUTZER] [ADRESSE]     (Passwort über stdin)
 leitstand tresor 2fa NAME | notiz NAME                (Wert über stdin)
 leitstand tell PROJEKTNAME NACHRICHT
+leitstand laeufe | laeufe weiter IDS|alle | laeufe erledigt IDS|alle   (vom Menschen gestoppte Läufe, nur auf seine Anweisung)
 leitstand auftrag TITEL                               (Auftragstext über stdin)
 leitstand auftraege
+leitstand laptop TITEL                                (Auftrag an den Mac des Menschen, Text über stdin)
 leitstand hilfe TEXT | hilfe erledigt                 (Klick im Livebild deines Browsers)
 leitstand uebergabe URL TEXT                          (Mensch erledigt es im eigenen Browser)
 leitstand stand TEXT                                  (Zwischenstand bei langen Schritten)
@@ -71,10 +73,14 @@ case "${1:-}:${2:-}" in
   tresor:notiz) call tresor/notiz --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "wert@-" ;;
   auftrag:*) call auftrag --data-urlencode "titel=${2:?TITEL fehlt}" --data-urlencode "text@-" ;;
   auftraege:*) call auftraege ;;
+  laptop:*) call laptop --data-urlencode "titel=${2:?TITEL fehlt}" --data-urlencode "text@-" ;;
   ergebnis:*) call ergebnis --data-urlencode "titel=${2:?TITEL fehlt}" --data-urlencode "ziel=${3:?ZIEL fehlt}" --data-urlencode "text=${4:-}" ;;
   stand:*) call stand --data-urlencode "text=${2:?TEXT fehlt}" ;;
   hilfe:*) call hilfe --data-urlencode "text=${2:?TEXT fehlt}" ;;
   uebergabe:*) call uebergabe --data-urlencode "url=${2:?URL fehlt}" --data-urlencode "text=${3:?TEXT fehlt}" ;;
+  laeufe:liste | laeufe:) call laeufe ;;
+  laeufe:weiter) shift 2; call laeufe/weiter --data-urlencode "ids=${*:?IDS oder alle fehlt}" ;;
+  laeufe:erledigt) shift 2; call laeufe/erledigt --data-urlencode "ids=${*:?IDS oder alle fehlt}" ;;
   tell:*) call tell --data-urlencode "projekt=${2:?PROJEKTNAME fehlt}" --data-urlencode "nachricht=${3:?NACHRICHT fehlt}" ;;
   *) usage ;;
 esac

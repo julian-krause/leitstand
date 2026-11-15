@@ -1293,6 +1293,8 @@ function renderProjects() {
       <div class="checks">
         <span class="note" style="margin:0">Der Agent darf nutzen:</span>
         <label><input type="checkbox" data-browser ${p.browser ? 'checked' : ''}>Browser</label>
+        ${machine?.info?.os === 'darwin' ? `<label title="Der Agent bedient den Mac: Bildschirm sehen, klicken, tippen, Programme (Peekaboo). Braucht die Peekaboo-App mit Bildschirmaufnahme und Bedienungshilfen."><input type="checkbox" data-computer ${p.computerUse ? 'checked' : ''}>Computer Use</label>
+        <label title="Agenten anderer Projekte schicken diesem Projekt Aufträge, die nur auf deinem Mac gehen (leitstand laptop)."><input type="checkbox" data-laptop ${p.laptop ? 'checked' : ''}>Nimmt Laptop-Aufträge an</label>` : ''}
         ${machine?.kind === 'local' ? `<label title="Deine persönliche ~/.claude/CLAUDE.md, etwa die Regeln zu deinem Second Brain"><input type="checkbox" data-personal ${p.personal ? 'checked' : ''}>Meine CLAUDE.md</label>` : ''}
         <label><input type="checkbox" data-identity="mail" ${i.mail ? 'checked' : ''}>Postfach</label>
         <label><input type="checkbox" data-identity="sms" ${i.sms ? 'checked' : ''}>SMS</label>
@@ -1322,6 +1324,10 @@ $('#projects').addEventListener('change', (event) => {
     run(api('PATCH', `/api/projects/${project.id}`, { [field]: event.target.value }));
   } else if ('personal' in event.target.dataset) {
     run(api('PATCH', `/api/projects/${project.id}`, { personal: event.target.checked }));
+  } else if ('computer' in event.target.dataset) {
+    run(api('PATCH', `/api/projects/${project.id}`, { computerUse: event.target.checked }));
+  } else if ('laptop' in event.target.dataset) {
+    run(api('PATCH', `/api/projects/${project.id}`, { laptop: event.target.checked }));
   } else if ('browser' in event.target.dataset) {
     run(api('PATCH', `/api/projects/${project.id}`, { browser: event.target.checked }));
   } else if (event.target.dataset.identity) {

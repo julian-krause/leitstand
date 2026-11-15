@@ -253,6 +253,12 @@ async function api(req, url) {
         project.identity = { mail: Boolean(body.identity.mail), sms: Boolean(body.identity.sms), wallet: Boolean(body.identity.wallet) };
       }
       if (typeof body.browser === 'boolean') project.browser = body.browser;
+      if (typeof body.computerUse === 'boolean') project.computerUse = body.computerUse;
+      if (typeof body.laptop === 'boolean') {
+        // Es gibt genau ein Laptop-Projekt.
+        if (body.laptop) for (const other of state.projects) other.laptop = false;
+        project.laptop = body.laptop;
+      }
       if (typeof body.personal === 'boolean') project.personal = body.personal;
       if (typeof body.browserVisible === 'boolean') project.browserVisible = body.browserVisible;
       changed('projects');
