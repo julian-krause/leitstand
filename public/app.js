@@ -175,6 +175,7 @@ const KIND_LABEL = {
   antwort: 'Antwort',
   fehler: 'Fehler',
   hilfe: 'Kurz gebraucht',
+  uebergabe: 'Im eigenen Browser',
 };
 
 function dotClass(chat) {
@@ -993,6 +994,8 @@ function renderAsk(chat) {
     buttons.push('<button class="primary" data-a="done">Erledigt</button>', '<button data-a="reply">Nacharbeiten</button>');
   } else if (a.kind === 'fehler') {
     buttons.push('<button class="primary" data-a="retry">Nochmal versuchen</button>', '<button data-a="reply">Antworten</button>');
+  } else if (a.kind === 'uebergabe') {
+    buttons.push('<button class="primary" data-a="open">Im eigenen Browser öffnen ↗</button>', '<button data-a="handoff-done">Erledigt</button>', '<button data-a="reply">Ging nicht</button>');
   } else {
     buttons.push('<button class="primary" data-a="reply">Antworten</button>');
   }
@@ -1008,6 +1011,10 @@ function renderAsk(chat) {
       : 'Diese Schritte wurden dem Agenten verweigert, und er kommt ohne sie nicht weiter. Die Freigabe gilt nur für genau diese Schritte.');
   }
   const hintHtml = a.kind === 'zahlung' && a.payment ? paymentHints(a.payment) : '';
+  if (a.kind === 'uebergabe') {
+    notes.push(`Der Agent hat alles vorbereitet. Das hier erledigst du selbst, in deinem normalen Browser oder am Handy: ${a.url}`);
+    notes.push('Zugangsdaten, die er angelegt hat, kopierst du im Reiter „Tresor“. Danach „Erledigt“, und er macht von selbst weiter.');
+  }
   if (a.kind === 'zahlung') notes.push(`Nach der Freigabe bekommt der Agent die Kartendaten für diesen Kauf. Diesen Monat bisher freigegeben: ${money(monthSpent(), S.settings.wallet?.currency || 'EUR')}.`);
   const tone = { fertig: 'fertig', fehler: 'fehler', zahlung: 'zahlung' }[a.kind] || '';
   el.innerHTML = `<div class="ask ${tone}">
@@ -1023,6 +1030,7 @@ function renderAsk(chat) {
     const action = button.dataset.a;
     if (action === 'option') act(chat.id, 'approve', { option: a.optionen[Number(button.dataset.i)] });
     else if (action === 'reply') focusComposer();
+    else if (action === 'open') window.open(a.url, '_blank', 'noopener,noreferrer');
     else act(chat.id, action);
   };
 }

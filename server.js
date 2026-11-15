@@ -84,6 +84,14 @@ function chatAction(chat, body) {
       );
       return;
     }
+    case 'handoff-done':
+      if (attention.kind !== 'uebergabe') throw httpError(400, 'Hier wartet keine Übergabe.');
+      sendMessage(
+        chat,
+        `Ich habe das im eigenen Browser erledigt: ${attention.frage}\nPrüf den Stand (Kundenkonto, Bestätigungsmail) und mach weiter. Versuch den erledigten Schritt nicht noch einmal selbst.`,
+        'Im eigenen Browser erledigt',
+      );
+      return;
     case 'retry':
       sendMessage(chat, 'Der letzte Lauf ist abgebrochen. Prüf den Stand und mach dort weiter.', 'Nochmal versuchen');
       return;

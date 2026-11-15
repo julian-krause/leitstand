@@ -32,7 +32,8 @@ leitstand tresor 2fa NAME | notiz NAME                (Wert über stdin)
 leitstand tell PROJEKTNAME NACHRICHT
 leitstand auftrag TITEL                               (Auftragstext über stdin)
 leitstand auftraege
-leitstand hilfe TEXT | hilfe erledigt
+leitstand hilfe TEXT | hilfe erledigt                 (Klick im Livebild deines Browsers)
+leitstand uebergabe URL TEXT                          (Mensch erledigt es im eigenen Browser)
 leitstand stand TEXT                                  (Zwischenstand bei langen Schritten)
 leitstand ergebnis TITEL ZIEL [BESCHREIBUNG]           (ZIEL: Pfad im Projektordner oder Webadresse)
 EOF
@@ -73,6 +74,7 @@ case "${1:-}:${2:-}" in
   ergebnis:*) call ergebnis --data-urlencode "titel=${2:?TITEL fehlt}" --data-urlencode "ziel=${3:?ZIEL fehlt}" --data-urlencode "text=${4:-}" ;;
   stand:*) call stand --data-urlencode "text=${2:?TEXT fehlt}" ;;
   hilfe:*) call hilfe --data-urlencode "text=${2:?TEXT fehlt}" ;;
+  uebergabe:*) call uebergabe --data-urlencode "url=${2:?URL fehlt}" --data-urlencode "text=${3:?TEXT fehlt}" ;;
   tell:*) call tell --data-urlencode "projekt=${2:?PROJEKTNAME fehlt}" --data-urlencode "nachricht=${3:?NACHRICHT fehlt}" ;;
   *) usage ;;
 esac
