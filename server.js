@@ -12,7 +12,7 @@ import {
 } from './lib/store.js';
 import {
   removeFinishedChildren, removeChild,
-  sendMessage, stopRun, stopAll, newChat, publicKey, addMachine, removeMachine, setupMachine, pushTokens, pump, browserStream, interruptRun,
+  sendMessage, probeAccount, stopRun, stopAll, newChat, publicKey, addMachine, removeMachine, setupMachine, pushTokens, pump, browserStream, interruptRun,
 } from './lib/runs.js';
 import { MEETING_PREFIX } from './lib/agent.js';
 import { listPages, readPage, writePage } from './lib/pages.js';
@@ -401,6 +401,7 @@ async function api(req, url) {
       return account;
     }
     const account = findAccount(key);
+    if (method === 'POST' && sub === 'probe' && account) return probeAccount(account);
     if (method === 'DELETE' && account && !account.builtin) {
       state.accounts = state.accounts.filter((a) => a.id !== account.id);
       delete secrets.accounts[account.id];

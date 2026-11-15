@@ -1676,12 +1676,13 @@ function renderFleet() {
   const accounts = S.accounts.map((a) => {
     const l = a.limits;
     const limited = a.limitedUntil > Date.now();
+    const measured = l?.at ? ` · gemessen ${esc(ago(l.at))}` : '';
     return `<div class="list-row" data-account="${a.id}">
       <div class="main"><b>${esc(a.name)}${limited ? ` <span class="badge bad">am Limit bis ${esc(when(a.limitedUntil))}</span>` : ''}</b>
-        <span>${l ? `5 Stunden: ${Math.round(usage(l.five_hour) * 100)} % · 7 Tage: ${Math.round(usage(l.seven_day) * 100)} %` : 'noch keine Auslastung gemessen'}</span>
+        <span>${l ? `5 Stunden: ${Math.round(usage(l.five_hour) * 100)} % · 7 Tage: ${Math.round(usage(l.seven_day) * 100)} %${measured}` : 'noch keine Auslastung gemessen'}</span>
         ${l ? bar(usage(l.five_hour), 1) : ''}
       </div>
-      ${a.builtin ? '' : '<button class="ghost danger" data-a="delete-account">Entfernen</button>'}
+      ${a.builtin ? '' : '<button data-a="probe-account" title="Fragt das Abo jetzt nach seinem Limit, etwa nach einem Reset">Jetzt prüfen</button><button class="ghost danger" data-a="delete-account">Entfernen</button>'}
     </div>`;
   });
 
@@ -1726,6 +1727,12 @@ $('#fleet').addEventListener('click', (event) => {
     if (!confirm(`„${machine.name}“ aus der Flotte entfernen?`)) return;
     const alsoServer = machine.hetznerId && confirm('Auch den Server bei Hetzner löschen? Sonst läuft die Abrechnung dort weiter. Alle Daten auf dem Server gehen dabei verloren.');
     run(api('DELETE', `/api/machines/${machine.id}${alsoServer ? '?server=1' : ''}`));
+  }
+  if (action === 'probe-account') {
+    const id = event.target.closest('[data-account]').dataset.account;
+    event.target.disabled = true;
+    event.target.textContent = 'Prüft …';
+    run(api('POST', `/api/accounts/${id}/probe`));
   }
   if (action === 'delete-account') {
     const account = S.accounts.find((a) => a.id === event.target.closest('[data-account]').dataset.account);
