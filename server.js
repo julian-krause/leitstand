@@ -11,6 +11,7 @@ import {
   addClient, id, findChat, findProject, findMachine, findAccount, httpError, readRaw,
 } from './lib/store.js';
 import {
+  removeFinishedChildren, removeChild,
   sendMessage, stopRun, stopAll, newChat, publicKey, addMachine, removeMachine, setupMachine, pushTokens, pump, browserStream, interruptRun,
 } from './lib/runs.js';
 import { MEETING_PREFIX } from './lib/agent.js';
@@ -115,6 +116,16 @@ function chatAction(chat, body) {
       chat.attention = null;
       chat.queued = null;
       chatChanged(chat);
+      // Mit dem Auftrag verschwinden auch seine (jetzt beendeten) Teilaufträge aus der Liste.
+      removeFinishedChildren(chat, 'mensch');
+      return;
+    case 'remove-children':
+      // Knopf „Beendete Teilaufträge entfernen“: nur beendete, laufende bleiben stehen.
+      removeFinishedChildren(chat, 'mensch');
+      return;
+    case 'remove':
+      // Einen einzelnen beendeten Teilauftrag entfernen.
+      if (!chat.parentId || !removeChild(chat, 'mensch')) throw httpError(409, 'Nur beendete Teilaufträge lassen sich entfernen. Stopp ihn zuerst.');
       return;
     case 'interrupt':
       interruptRun(chat, typeof body.text === 'string' ? body.text.slice(0, 20000) : '');

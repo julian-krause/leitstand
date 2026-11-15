@@ -49,6 +49,7 @@ leitstand auftrag TITEL [modell=opus|sonnet|haiku|fable] [aufwand=low|medium|hig
                                                       (Auftragstext über stdin; Vorgabe: opus, medium)
 leitstand auftraege modell IDS|alle [modell=…] [aufwand=…]   (Modell eigener Teilaufträge ab ihrem nächsten Zug)
 leitstand auftraege | auftraege stopp IDS|alle | auftraege weiter IDS|alle
+leitstand auftraege entfernen IDS|alle                (beendete Teilaufträge aus der Liste entfernen)
 leitstand auftraege pause IDS|alle [bis=reset|HH:MM|MINUTEN]   (eigene Teilaufträge anhalten)
 leitstand budget                                      (Abo-Kontingent: Auslastung, Rücksetzzeit, Empfehlung)
 leitstand laptop TITEL                                (Auftrag an den Mac des Menschen, Text über stdin)
@@ -93,7 +94,7 @@ case "${1:-}:${2:-}" in
   tresor:2fa) call tresor/2fa --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "wert@-" ;;
   tresor:loeschen) call tresor/loeschen --data-urlencode "name=${3:?NAME fehlt}" ;;
   tresor:notiz) call tresor/notiz --data-urlencode "name=${3:?NAME fehlt}" --data-urlencode "wert@-" ;;
-  auftrag:stopp | auftrag:pause | auftrag:weiter)
+  auftrag:stopp | auftrag:pause | auftrag:weiter | auftrag:entfernen)
     if [ -n "${3:-}" ] && [[ "$3" != *=* ]]; then a="$2"; shift 2; call "auftraege/$a" --data-urlencode "ids=$*"
     else shift; order "$@"; fi ;;
   auftraege:modell)
@@ -101,7 +102,7 @@ case "${1:-}:${2:-}" in
     ids=(); fields=()
     for w in "$@"; do case "$w" in *=*) fields+=(--data-urlencode "$w") ;; *) ids+=("$w") ;; esac; done
     call auftraege/modell --data-urlencode "ids=${ids[*]:?IDS oder alle fehlt}" "${fields[@]}" ;;
-  auftraege:stopp | auftraege:pause | auftraege:weiter) a="$2"; shift 2; call "auftraege/$a" --data-urlencode "ids=${*:?IDS oder alle fehlt}" ;;
+  auftraege:stopp | auftraege:pause | auftraege:weiter | auftraege:entfernen) a="$2"; shift 2; call "auftraege/$a" --data-urlencode "ids=${*:?IDS oder alle fehlt}" ;;
   budget:*) call budget ;;
   auftrag:*) shift; [ -n "${1:-}" ] || { echo "TITEL fehlt" >&2; exit 2; }; order "$@" ;;
   auftraege:*) call auftraege ;;

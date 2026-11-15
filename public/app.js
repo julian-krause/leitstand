@@ -167,6 +167,11 @@ function queue() {
     .sort((a, b) => rank(a) - rank(b) || waitingSince(a) - waitingSince(b));
 }
 const childrenOf = (chat) => chatList().filter((c) => c.parentId === chat.id);
+// Beendet und samt eigener Teilaufträge entfernbar (wie isFinished/canRemove in lib/runs.js).
+const isFinishedChat = (c) =>
+  ['done', 'idle', 'archived'].includes(c.status) ||
+  (c.status === 'attention' && (Boolean(c.stopped) || ['fertig', 'fehler', 'antwort'].includes(c.attention?.kind)));
+const canRemoveChat = (c) => c.status !== 'archived' && isFinishedChat(c) && childrenOf(c).every((k) => k.status === 'archived' || canRemoveChat(k) );
 
 const KIND_LABEL = {
   entscheidung: 'Entscheidung',
@@ -640,11 +645,16 @@ function renderChatList() {
   for (const project of ordered) {
     const mine = all.filter((c) => c.projectId === project.id && visible(c));
     const isChild = (c) => c.parentId && mine.some((p) => p.id === c.parentId);
-    // Neueste Aufträge oben, darunter jeweils ihre Teilaufträge in der Reihenfolge der Vergabe.
+    // Neueste Aufträge oben, darunter jeweils ihre Teilaufträge (auch verschachtelte) in der Reihenfolge der Vergabe.
+    const depth = new Map();
+    const withKids = (c, d) => {
+      depth.set(c.id, d);
+      return [c, ...mine.filter((k) => k.parentId === c.id).sort((a, b) => a.createdAt - b.createdAt).flatMap((k) => withKids(k, d + 1))];
+    };
     const chats = mine
       .filter((c) => !isChild(c))
       .sort((a, b) => b.createdAt - a.createdAt)
-      .flatMap((c) => [c, ...mine.filter((k) => k.parentId === c.id).sort((a, b) => a.createdAt - b.createdAt)]);
+      .flatMap((c) => withKids(c, 0));
     if (!chats.length && S.chatFilter !== 'alle') continue;
     html.push(`<div class="group-title ${project.zentrale ? 'zentrale' : ''}"><span>${esc(project.name)}</span><span class="group-side">${project.zentrale ? 'verteilt an die Projekte' : esc(machineOf(project)?.kind === 'ssh' ? machineOf(project).name : '')}<button class="group-add" data-new="${project.id}" title="Neuer Chat in „${esc(project.name)}“" aria-label="Neuer Chat in ${esc(project.name)}">+</button></span></div>`);
     if (!chats.length) html.push('<p class="hint">Noch kein Auftrag.</p>');
@@ -656,10 +666,12 @@ function renderChatList() {
         : chat.status === 'waiting' ? 'wartet'
         : isSnoozed(chat) ? 'später'
         : ago(chat.attention?.since || chat.createdAt);
-      html.push(`<button class="item ${chat.id === S.chatId ? 'active' : ''} ${chat.status === 'done' ? 'dim' : ''} ${isChild(chat) ? 'child' : ''}" data-chat="${chat.id}">
+      const d = depth.get(chat.id) || 0;
+      html.push(`<button class="item ${chat.id === S.chatId ? 'active' : ''} ${chat.status === 'done' ? 'dim' : ''} ${d ? 'child' : ''}" data-chat="${chat.id}" ${d > 1 ? `style="padding-left:${12 + d * 14}px"` : ''}>
         <span class="dot ${dotClass(chat)}"></span>
         <span class="label">${esc(chat.title)}</span>
         <span class="meta">${esc(meta)}</span>
+        ${d && canRemoveChat(chat) ? `<span class="item-x" role="button" data-remove="${chat.id}" title="Beendeten Teilauftrag aus der Liste entfernen" aria-label="Entfernen">×</span>` : ''}
       </button>`);
     }
   }
@@ -744,8 +756,9 @@ function updateChat(forceScroll = false) {
     idle: 'bereit',
     archived: 'archiviert',
   }[chat.status];
-  const kids = childrenOf(chat);
+  const kids = childrenOf(chat).filter((c) => c.status !== 'archived');
   const kidsOpen = kids.filter((c) => ['running', 'queued'].includes(c.status)).length;
+  const kidsDone = kids.filter(canRemoveChat).length;
   const parent = chat.parentId && S.chats.get(chat.parentId);
   const sub = [project?.name, machine?.kind === 'ssh' ? machine.name : '', chat.viaZentrale ? 'über die Zentrale' : '', project?.zentrale ? 'verteilt nur, ohne Vorgeschichte' : '', parent ? `Teilauftrag von „${parent.title}“` : 'Lead-Agent', kids.length ? `${kids.length} Teilaufträge, ${kidsOpen} laufen` : '', chat.attention?.naechster_schritt ? `Nächster Schritt: ${chat.attention.naechster_schritt}` : '']
     .filter(Boolean).map(esc).join(' · ');
@@ -765,7 +778,8 @@ function updateChat(forceScroll = false) {
     <span class="badge"><span class="dot ${dotClass(chat)}"></span>${esc(statusText)}</span>
     ${chat.status === 'running' && project?.browser && !chat.assist ? `<button data-a="live" title="Den Browser des Agenten live ansehen">${S.liveOpen === chat.id ? 'Browser schließen' : 'Browser'}</button>` : ''}
     ${['running', 'queued', 'waiting'].includes(chat.status) ? '<button data-a="stop">Stoppen</button>' : ''}
-    <button class="ghost" data-a="archive" title="Aus der Liste entfernen">Archivieren</button>`;
+    ${kidsDone ? `<button data-a="remove-children" title="Beendete Teilaufträge aus der Liste entfernen; laufende bleiben stehen">Beendete entfernen (${kidsDone})</button>` : ''}
+    ${chat.parentId && canRemoveChat(chat) ? '<button class="ghost" data-a="remove" title="Diesen beendeten Teilauftrag aus der Liste entfernen">Entfernen</button>' : '<button class="ghost" data-a="archive" title="Aus der Liste entfernen">Archivieren</button>'}`;
   $('#chat-head').onchange = (event) => {
     const pick = event.target.closest('select[data-pick]')?.dataset.pick;
     if (pick) run(api('PATCH', `/api/chats/${chat.id}`, { [pick]: event.target.value }).then((c) => { S.chats.set(c.id, c); updateChat(); }));
@@ -778,6 +792,11 @@ function updateChat(forceScroll = false) {
     if (a === 'live') {
       S.liveOpen = S.liveOpen === chat.id ? null : chat.id;
       updateChat();
+    }
+    if (a === 'remove-children') act(chat.id, 'remove-children');
+    if (a === 'remove') {
+      act(chat.id, 'remove');
+      selectChat(null);
     }
     if (a === 'archive' && confirm('Diesen Chat archivieren? Ein laufender Agent wird gestoppt.')) {
       act(chat.id, 'archive');
@@ -2052,6 +2071,11 @@ $('#chat-filter').onclick = (event) => {
   renderChatList();
 };
 $('#chat-list').onclick = (event) => {
+  const remove = event.target.closest('[data-remove]')?.dataset.remove;
+  if (remove) {
+    if (S.chatId === remove) selectChat(null);
+    return act(remove, 'remove');
+  }
   const add = event.target.closest('[data-new]')?.dataset.new;
   if (add) return newChatDialog({ projectId: add });
   const chatId = event.target.closest('[data-chat]')?.dataset.chat;
@@ -2093,7 +2117,8 @@ function connect() {
     const chat = JSON.parse(event.data);
     S.chats.set(chat.id, chat);
     renderAll();
-    if (chat.id === S.chatId) updateChat();
+    // Auch wenn sich ein Teilauftrag des offenen Chats ändert (Zähler, Knopf „Beendete entfernen“).
+    if (chat.id === S.chatId || chat.parentId === S.chatId) updateChat();
     if (S.view === 'fleet') renderFleet();
     refreshOverviewLive();
   });
